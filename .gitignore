@@ -5,3 +5,4 @@ uniref*/
 *.fasta
 checkpoints/
 wandb/
+lightning_logs/

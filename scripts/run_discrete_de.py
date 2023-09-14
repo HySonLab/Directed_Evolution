@@ -1,6 +1,10 @@
 import argparse
 import os
-from typing import List
+import pandas as pd
+import torch
+import torch.multiprocessing as mp
+import traceback
+from typing import List, Union, Tuple
 from transformers import PreTrainedTokenizerFast
 from de.common.io_utils import read_fasta
 from de.common.utils import set_seed, enable_full_deterministic
@@ -36,6 +40,10 @@ def parse_args():
                         type=int,
                         default=20,
                         help="No. population per step.")
+    parser.add_argument("--num_proposes_per_var",
+                        type=int,
+                        default=10,
+                        help="Number of proposed mutations for each variant in the pool.")
     parser.add_argument("--k",
                         type=int,
                         default=1,
@@ -77,6 +85,10 @@ def parse_args():
                         type=str,
                         default="-1",
                         help="Device(s) to run directed evoltion, separated by comma.")
+    parser.add_argument("--batch_size",
+                        type=int,
+                        default=10,
+                        help="Batch size for inference.")
     parser.add_argument("--seed",
                         type=int,
                         default=0,
@@ -84,6 +96,14 @@ def parse_args():
     parser.add_argument("--set_seed_only",
                         action="store_true",
                         help="Whether to enable full determinism or set random seed only.")
+    parser.add_argument("--num_processes",
+                        type=int,
+                        default=mp.cpu_count() // 2,
+                        help="No. cpus used for multi-processing.")
+    parser.add_argument("--result_dir",
+                        type=str,
+                        default="/home/thanhtvt1/workspace/Directed_Evolution/exps/results",
+                        help="Directory to save result csv file.")
     args = parser.parse_args()
     return args
 
@@ -95,10 +115,11 @@ def get_sequence_from_fasta(fasta_file: str, max_seq_len: int) -> List[str]:
 
 
 # TODO: re-write this function (fit with ESM2)
-def initialize_mutation_model(args):
+def initialize_mutation_model(args, device: torch.device):
     model = ESM2(vocab_file=args.vocab_file,
                  pretrained_model_name_or_path=args.pretrained_mutation_path)
     tokenizer = model.tokenizer
+    model = model.to(device)
     return model, tokenizer
 
 
@@ -111,7 +132,9 @@ def initialize_maskers(args):
     return [imp_masker, rand_masker]
 
 
-def intialize_fitness_predictor(tokenizer_file: str, model_size: str = "Small"):
+def intialize_fitness_predictor(tokenizer_file: str,
+                                model_size: str = "Small",
+                                device: Union[str, torch.device] = "cpu",):
     model_name = f"PascalNotin/Tranception_{model_size}"
     model = TranceptionLMHeadModel.from_pretrained(
         pretrained_model_name_or_path=model_name
@@ -124,7 +147,15 @@ def intialize_fitness_predictor(tokenizer_file: str, model_size: str = "Small"):
         cls_token="[CLS]",
         mask_token="[MASK]"
     )
+    model = model.to(device)
     return model
+
+
+def save_results(evos: List[Tuple[str, float]], output_dir: str):
+    os.makedirs(output_dir, exist_ok=True)
+    mutants, score = zip(*evos)
+    df = pd.DataFrame.from_dict({"mutants": list(mutants), "score": list(score)})
+    df.to_csv(os.path.join(output_dir, "result.csv"))
 
 
 def main(args):
@@ -134,11 +165,12 @@ def main(args):
     # Init env stuffs
     set_seed(args.seed) if args.set_seed_only else enable_full_deterministic(args.seed)
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = 'true'
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
-    device = "cpu" if args.devices == "-1" else "gpu"
+    # os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
+    # device = "cpu" if args.devices == "-1" else "cuda"
+    device = torch.device("cpu")
 
     # Init models
-    mutation_model, mutation_tokenizer = initialize_mutation_model(args)
+    mutation_model, mutation_tokenizer = initialize_mutation_model(args, device)
     fitness_predictor = intialize_fitness_predictor(args.tokenizer_file,
                                                     args.tranception_type)
 
@@ -153,6 +185,8 @@ def main(args):
         mutation_model=mutation_model,
         mutation_tokenizer=mutation_tokenizer,
         fitness_predictor=fitness_predictor,
+        batch_size_inference=args.batch_size,
+        num_propose_mutation_per_variant=args.num_proposes_per_var,
         k=args.k,
         population_ratio_per_mask=args.population_ratio_per_mask,
         edit_range=args.edit_range,
@@ -161,10 +195,21 @@ def main(args):
         device=device
     )
 
-    # TODO: have to vectorize/multiprocess this.
-    for seq in sequences:
-        mutated_seq = direct_evo(seq)
-        break
+    mp.set_start_method("spawn", force=True)
+
+    try:
+        pool = mp.Pool(args.num_processes)
+        evos = pool.map(direct_evo, sequences)
+    except Exception as e:
+        print(traceback.format_exc())
+        print("Main Pool Error:", e)
+    except KeyboardInterrupt:
+        exit()
+    finally:
+        pool.terminate()
+        pool.join()
+
+    save_results(evos, args.result_dir)
 
 
 if __name__ == "__main__":

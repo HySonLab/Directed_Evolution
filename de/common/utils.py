@@ -3,6 +3,7 @@ import numpy as np
 import time
 import torch
 import random
+from datetime import datetime
 from functools import wraps
 from typing import List
 
@@ -87,7 +88,7 @@ def timer(func):
         result = func(*args, **kwargs)
         end_time = time.perf_counter()
         total_time = end_time - start_time
-        # first item in the args, ie `args[0]` is `self`
-        print(f'Function {func.__name__} took {total_time:.4f} seconds')
+        now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        print(f'{now}: Function {func.__name__} took {total_time:.4f} seconds')
         return result
     return timeit_wrapper

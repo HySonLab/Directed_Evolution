@@ -24,7 +24,7 @@ class RandomMasker(BaseMasker):
             pos_to_mutate (List[int]): Masked positions.
         """
         if edit_range is None:
-            edit_range = (1, len(seq) - 1)  # BUG: at 0, model will replace <cls>.
+            edit_range = (1, len(seq) - 2)  # BUG: at 0 (len-1), model will replace <cls> (<eos>).
         else:
             assert edit_range[0] < 0, \
                 "The lower bound of `edit_range` must not negative."

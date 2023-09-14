@@ -69,14 +69,14 @@ class ESM2(torch.nn.Module):
             (List[str]): Predicted characters."""
         return self.tokenizer.batch_decode(tokens)
 
-    def forward(self, inputs: List[str]) -> torch.Tensor:
+    def forward(self, inputs: BatchEncoding) -> torch.Tensor:
         """Forward pass of ESM2 model
 
         Args:
-            inputs (List[str]): A list of masked protein sequence.
+            inputs (BatchEncoding): Output of tokenizer.
 
         Returns:
-            logits (torch.Tensor): Logits."""
-        encoded_inputs = self.tokenize(inputs)
-        logits = self.model(**encoded_inputs).logits
-        return logits
+            logits (torch.Tensor): Logits.
+        """
+        results = self.model(**inputs)
+        return results

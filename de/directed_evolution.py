@@ -1,7 +1,9 @@
+import itertools
 import numpy as np
 import os
 import pandas as pd
 import torch
+from datetime import datetime
 from operator import itemgetter
 from typing import List, Tuple
 from de.common.utils import split_kmers, timer
@@ -20,7 +22,8 @@ class DiscreteDirectedEvolution:
                  k: int = 3,
                  population_ratio_per_mask: List[float] = None,
                  scoring_mirror: bool = False,
-                 batch_size_inference: int = 10,
+                 batch_size_inference: int = 5,
+                 num_propose_mutation_per_variant: int = 5,
                  edit_range: Tuple[int, int] = None,
                  mutation_ckpt_path: str = None,
                  verbose: bool = False,
@@ -42,6 +45,7 @@ class DiscreteDirectedEvolution:
         self.k = k
         self.scoring_mirror = scoring_mirror
         self.batch_size_inference = batch_size_inference
+        self.num_propose_mutation_per_variant = num_propose_mutation_per_variant
         self.edit_range = edit_range
         self.num_workers = num_workers
         self.verbose = verbose
@@ -51,7 +55,7 @@ class DiscreteDirectedEvolution:
         if population_ratio_per_mask is None:
             self.population_ratio_per_mask = [1 / len(maskers) for _ in range(len(maskers))]
 
-        self.mutation_logger = [{} for _ in range(self.population)]
+        self.mutation_logger = None
 
         if mutation_ckpt_path is not None:
             if not os.path.exists(mutation_tokenizer):
@@ -89,8 +93,9 @@ class DiscreteDirectedEvolution:
             masked_poses (List[int]): Masked positions.
         """
         if self.verbose:
-            print("\n====== MASK VARIANTS ======")
-            print(f"Start masking {self.population} variants.")
+            now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            print(f"\n{now}: ====== MASK VARIANTS ======")
+            print(f"{now}: Start masking {self.population} variants.")
 
         masked_variants, masked_poses = [], []
         begin_idx = 0
@@ -128,13 +133,15 @@ class DiscreteDirectedEvolution:
             mutants (List[str]): List of strings indicates the mutations in each sequence.
         """
         if self.verbose:
-            print("\n====== MUTATE MASKED POSITION ======")
+            now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            print(f"\n{now}: ====== MUTATE MASKED POSITION ======")
 
         # process input
         masked_data = [''.join(var) for var in masked_variants]
 
         # run mutation model
-        logits = self.mutation_model(masked_data)
+        masked_inputs = self.mutation_model.tokenize(masked_data)
+        logits = self.mutation_model(masked_inputs).logits
 
         log_probs = torch.nn.functional.log_softmax(logits, dim=-1)  # [N, seq_len, vocab_size]
         predicted_seqs = torch.argmax(log_probs, dim=-1)  # [N, seq_len] (N ~ population)
@@ -143,6 +150,7 @@ class DiscreteDirectedEvolution:
         # replace predicted token with <masked> token
         mutated_seqs = []
         mutants = []
+        # TODO: Think a way to vectorize this!!!!
         for idx in range(self.population):
             tposes = torch.tensor(masked_poses[idx])
             tposes = tposes.unsqueeze(0) if tposes.ndim == 0 else tposes
@@ -190,8 +198,12 @@ class DiscreteDirectedEvolution:
         top_log_fitness = log_fitness_df.nlargest(n=self.population,
                                                   columns="avg_score",
                                                   keep="first")
-        new_variants = top_log_fitness.mutated_sequence.tolist()
-        return new_variants
+        # Re-arrange mutation_logger
+        sorted_ids = top_log_fitness.index.tolist()
+        retriever = itemgetter(*sorted_ids)
+        self.mutation_logger = list(retriever(self.mutation_logger))
+
+        return top_log_fitness
 
     def __call__(self, wt_seq: str):
         """Run the discrete-space directed evolution
@@ -204,17 +216,28 @@ class DiscreteDirectedEvolution:
             scores (torch.Tensor): scores for the variants
         """
         if self.verbose:
-            print(f"Wild-type sequence: {wt_seq}")
+            now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            print(f"{now}: Wild-type sequence: {wt_seq}")
 
         # Initialize
         variants = [wt_seq] * self.population
+        self.mutation_logger = [{} for _ in range(self.population)]
 
         for step in range(self.n_steps):
-
+            # TODO: beam search-like mutation (each variant has more than 1 proposed mutation)
             # ============================ #
             # ====== PRE-PROCESSING ====== #
             # ============================ #
-            shuffled_ids = np.random.permutation(self.population).tolist()
+            if step != 0:
+                variants = list(itertools.chain.from_iterable(
+                    itertools.repeat(i, self.num_propose_mutation_per_variant)
+                    for i in variants
+                ))
+                self.mutation_logger = list(itertools.chain.from_iterable(
+                    itertools.repeat(i, self.num_propose_mutation_per_variant)
+                    for i in self.mutation_logger
+                ))
+            shuffled_ids = np.random.permutation(len(variants)).tolist()
             retriever = itemgetter(*shuffled_ids)
             shuffled_variants = list(retriever(variants))
             if step != 0:
@@ -236,6 +259,15 @@ class DiscreteDirectedEvolution:
             # ================================ #
             # ====== FITNESS PREDICTION ====== #
             # ================================ #
-            variants = self.predict_fitness(wt_seq, mutated_seqs, mutants)
+            top_fitness = self.predict_fitness(wt_seq, mutated_seqs, mutants)
+            variants = top_fitness.mutated_sequence.tolist()
 
-        return variants
+        # Return best variant
+        best_fitness = top_fitness.nlargest(1, columns="avg_score")
+        # best_variant = str(best_fitness.mutated_sequence.iloc[0])
+        best_score = float(best_fitness.avg_score.iloc[0])
+        mutant = ''
+        for k, v in self.mutation_logger[0].items():
+            mutant += v[0] + k + v[1] + ":"
+
+        return (mutant[:-1], best_score)

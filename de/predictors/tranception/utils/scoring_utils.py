@@ -122,11 +122,12 @@ def get_tranception_scores_mutated_sequences(model,
             batch_size=batch_size_inference,
             sampler=sampler,
             collate_fn=data_collator,
-            num_workers=num_workers,
+            num_workers=0,
             pin_memory=True,
             drop_last=False)
         mutant_index = 0
-        for encoded_batch in tqdm.tqdm(ds_loader):
+        # for encoded_batch in tqdm.tqdm(ds_loader):
+        for encoded_batch in ds_loader:
             full_batch_length = len(encoded_batch['input_ids'])
             mutated_sequence = np.array(mutated_sequence_df['mutated_sequence']
                                         [mutant_index:mutant_index +
