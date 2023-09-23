@@ -3,6 +3,5 @@ __pycache__/
 .idea/
 uniref*/
 *.fasta
-checkpoints/
+exps/
 wandb/
-lightning_logs/

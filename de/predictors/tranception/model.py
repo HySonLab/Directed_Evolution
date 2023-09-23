@@ -18,14 +18,6 @@ from .outputs import TranceptionCausalLMOutputWithCrossAttentions
 from .utils import msa_utils, scoring_utils
 
 
-def nanmean(v, *args, inplace=False, **kwargs):
-    if not inplace:
-        v = v.clone()
-    is_nan = torch.isnan(v)
-    v[is_nan] = 0
-    return v.sum(*args, **kwargs) / (~is_nan).float().sum(*args, **kwargs)
-
-
 def get_slopes(n, mode="standard_alibi", verbose=False):
     """
     Function to compute the m constant for each attention head.
@@ -703,10 +695,8 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
         self.retrieval_aggregation_mode = config.retrieval_aggregation_mode if hasattr(
             config, "retrieval_aggregation_mode") else None
         if self.retrieval_aggregation_mode is not None:
-            print(
-                "Model leverages both autoregressive and retrieval inference")
-            self.MSA_filename = config.MSA_filename if hasattr(
-                config, "MSA_filename") else False
+            print("Model leverages both autoregressive and retrieval inference")
+            self.MSA_filename = config.MSA_filename if hasattr(config, "MSA_filename") else False
             self.MSA_folder = '/'.join(self.MSA_filename.split(os.sep)[:-1])
             self.MSA_name = self.MSA_filename.split(os.sep)[-1]
             self.retrieval_inference_weight_LR = config.retrieval_inference_weight if hasattr(
@@ -719,17 +709,18 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
                 config, "full_protein_length") else -1
 
             self.MSA_log_prior = torch.log(
-                torch.tensor(
-                    msa_utils.get_msa_prior(
-                        MSA_data_file=self.MSA_filename,
-                        MSA_weight_file_name=config.MSA_weight_file_name,
-                        retrieval_aggregation_mode=self.
-                        retrieval_aggregation_mode,
-                        MSA_start=self.MSA_start,
-                        MSA_end=self.MSA_end,
-                        len_target_seq=self.full_protein_length,
-                        vocab=config.tokenizer.get_vocab(),
-                        verbose=False)).float().to(self.default_model_device))
+                torch.tensor(msa_utils.get_msa_prior(
+                    MSA_data_file=self.MSA_filename,
+                    MSA_weight_file_name=config.MSA_weight_file_name,
+                    retrieval_aggregation_mode=self.
+                    retrieval_aggregation_mode,
+                    MSA_start=self.MSA_start,
+                    MSA_end=self.MSA_end,
+                    len_target_seq=self.full_protein_length,
+                    vocab=config.tokenizer.get_vocab(),
+                    verbose=False)
+                ).float().to(self.default_model_device)
+            )
         else:
             print("Model only uses autoregressive inference")
 
@@ -937,7 +928,7 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
                 mask = attention_mask[..., 1:].float()
                 mask[mask == 0] = float('nan')
                 loss *= mask
-                loss = nanmean(loss, dim=1).mean()
+                loss = scoring_utils.nanmean(loss, dim=1).mean()
             else:
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
@@ -972,12 +963,12 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
                 for past_state in layer_past) for layer_past in past)
 
     def score_mutants(self,
-                      DMS_data,
-                      target_seq=None,
-                      scoring_mirror=True,
-                      batch_size_inference=10,
-                      num_workers=10,
-                      indel_mode=False):
+                      DMS_data: pd.DataFrame,
+                      target_seq: str = None,
+                      scoring_mirror: bool = True,
+                      batch_size_inference: int = 10,
+                      num_workers: int = 10,
+                      indel_mode: bool = False):
         """
         Method to score mutants in an input DMS file.
 
@@ -993,32 +984,21 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
                         Otherwise assumes substitutions.
         """
         df = DMS_data.copy()
-        # if ('mutated_sequence' not in df) and (not indel_mode):
-        #     df['mutated_sequence'] = df['mutant'].apply(
-        #         lambda x: scoring_utils.get_mutated_sequence(target_seq, x))
-        assert (
-            'mutated_sequence'
-            in df), "DMS file to score does not have mutated_sequence column"
-        # if mutant not in DMS file we default to mutated_sequence
-        # if 'mutant' not in df: df['mutant'] = df['mutated_sequence']
-        if 'DMS_score' in df:
-            del df['DMS_score']
-        if 'DMS_score_bin' in df:
-            del df['DMS_score_bin']
-        if target_seq is not None:
-            df_left_to_right_slices = scoring_utils.get_sequence_slices(
-                df,
-                target_seq=target_seq,
-                model_context_len=self.config.n_ctx - 2,
-                indel_mode=indel_mode,
-                scoring_window=self.config.scoring_window)
-        else:
-            df_left_to_right_slices = scoring_utils.get_sequence_slices(
-                df,
-                target_seq=list(df['mutated_sequence'])[0],
-                model_context_len=self.config.n_ctx - 2,
-                indel_mode=indel_mode,
-                scoring_window='sliding')
+
+        assert target_seq is not None, "target_seq must be specified."
+        assert 'mutated_sequence' in df, \
+            "DMS file to score does not have mutated_sequence column"
+
+        df = df.drop(columns=["DMS_score", "DMS_score_bin"], errors="ignore")
+
+        df_left_to_right_slices = scoring_utils.get_sequence_slices(
+            df,
+            target_seq=target_seq,
+            model_context_len=self.config.n_ctx - 2,
+            indel_mode=indel_mode,
+            scoring_window=self.config.scoring_window
+        )
+
         print("Scoring sequences from left to right")
         scores_L_to_R = scoring_utils.get_tranception_scores_mutated_sequences(
             model=self,
@@ -1027,7 +1007,8 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
             score_var_name='avg_score_L_to_R',
             target_seq=target_seq,
             num_workers=num_workers,
-            indel_mode=indel_mode)
+            indel_mode=indel_mode
+        )
         if scoring_mirror:
             print("Scoring sequences from right to left")
             df_right_to_left_slices = df_left_to_right_slices.copy()
@@ -1042,7 +1023,8 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
                 target_seq=target_seq,
                 num_workers=num_workers,
                 reverse=True,
-                indel_mode=indel_mode)
+                indel_mode=indel_mode
+            )
             all_scores = pd.merge(scores_L_to_R,
                                   scores_R_to_L,
                                   on='mutated_sequence',

@@ -1,29 +1,24 @@
 import math
-import random
 import itertools
 from sklearn.feature_extraction.text import TfidfVectorizer
-from typing import Dict, Tuple, List
+from typing import Dict, List
 from .base import BaseMasker
+from ...common.utils import split_kmers2
 
 
-class ImportanceMasker(BaseMasker):
+class ImportanceMasker2(BaseMasker):
     def __init__(self,
-                 use_full_dataset: bool = False,
-                 full_dataset: List[List[str]] = None,
-                 mask_token: str = "<mask>",
+                 k: int = 3,
                  max_subs: int = 5,
+                 mask_token: str = "<mask>",
                  low_importance_mask: bool = True):
         # TODO: mask by assigning weight by the importance?
-        self.use_full_dataset = use_full_dataset
-        self.mask_token = mask_token
+        self.k = k
         self.max_subs = max_subs
+        self.mask_token = mask_token
         self.low_importance_mask = low_importance_mask
         # calculate the importance
         self.importances = None
-        if use_full_dataset:
-            if full_dataset is None:
-                raise ValueError("`full_dataset` must be specified as use_full_dataset = True.")
-            self.importances = self._measure_importance(full_dataset)
         # cache importance of kmer (as we do not alter every kmer)
         self.cache = None
         # TF-IDF does not filter out stand-alone amino acid.
@@ -34,15 +29,12 @@ class ImportanceMasker(BaseMasker):
         """Inspired by paper
         `A Cheaper and Better Diffusion Language Model with Soft-Masked Noise`
         """
-        # TODO: vectorize this function (now using for loops)
-        # TODO: handle case when multiple case mask a single index
         merge_seqs = [' '.join(seq) for seq in sequences]
         # Run TF-IDF
         tfidfs = self.tfidf.fit_transform(merge_seqs)
         self.actual_vocabs = {
             name: idx for idx, name in enumerate(self.tfidf.get_feature_names_out())
         }
-
         # Get entropy
         kmer2entropy = self._get_entropy_of_unique_tokens(sequences)
 
@@ -91,21 +83,24 @@ class ImportanceMasker(BaseMasker):
         return entropy
 
     def mask_sequence(self,
-                      seq: List[str],
-                      kmer2imp: Dict,
-                      num_subs: int):
+                      org_seq: str,
+                      kmer_seq: List[str],
+                      kmer2imp: Dict):
         """Mask sequence based on kmer's importance.
         Default is to mask kmers with low importances.
 
         Args:
-            seq (List[str]): Protein sequence.
+            org_seq (str): Protein sequence.
+            kmer_seq (List[str]): List of overlapping k-mers.
             kmer2imp (Dict): A dictionary map kmer with its importance in the sequence.
-            num_subs (int): No. subsitution be made
 
         Returns:
-            seq (List[str]): Masked protein sequence.
+            seq (str): Masked protein sequence.
             pos_to_mutate (List[int]): Masked positions.
         """
+        if self.k > 1:
+            assert self.max_subs == 1, "Only substitute 1 k-mer at a time for k > 1."
+
         if self.low_importance_mask:
             sorted_kmers_by_imps = sorted(kmer2imp.items(), key=lambda x: x[1])
         else:
@@ -114,36 +109,34 @@ class ImportanceMasker(BaseMasker):
 
         positions = []
         curr_idx, start_pos = 0, 0
-        for _ in range(num_subs):
+        lseq = list(org_seq)
+        for _ in range(self.max_subs):
             try:
-                pos = seq.index(list(sorted_kmers_by_imps.keys())[curr_idx], start_pos)
+                pos = kmer_seq.index(list(sorted_kmers_by_imps.keys())[curr_idx], start_pos)
                 start_pos = pos
             except ValueError:
                 curr_idx += 1
                 start_pos = 0
-                pos = seq.index(list(sorted_kmers_by_imps.keys())[curr_idx], start_pos)
+                pos = kmer_seq.index(list(sorted_kmers_by_imps.keys())[curr_idx], start_pos)
+            finally:
+                lseq[pos:pos + self.k] = [self.mask_token] * self.k
+                positions.append(pos)
 
-            seq[pos] = self.mask_token
-            positions.append(pos)
-
-        return seq, positions
+        if self.k == 1:
+            return ''.join(lseq), positions
+        else:
+            return ''.join(lseq), list(range(positions[0], positions[0] + self.k))
 
     def run(self,
-            population: List[List[str]],
-            indices: List[int] = None,
-            edit_range: Tuple[int, int] = None):
-
-        if not self.use_full_dataset:
-            importances = self._measure_importance(population)
-        else:
-            assert indices is not None, "`indices` must be defined."
-            importances = self.importances[indices]
+            population: List[str],
+            indices: List[int] = None):
+        kmer_population = split_kmers2(population, k=self.k)
+        importances = self._measure_importance(kmer_population)
 
         masked_population = []
         masked_positions = []
-        for kmer2imp, seq in zip(importances, population):
-            num_edits = random.randint(1, self.max_subs)
-            new_seq, masked_pos = self.mask_sequence(seq, kmer2imp, num_edits)
+        for kmer2imp, seq, pop in zip(importances, kmer_population, population):
+            new_seq, masked_pos = self.mask_sequence(pop, seq, kmer2imp)
             masked_population.append(new_seq)
             masked_positions.append(masked_pos)
         return masked_population, masked_positions

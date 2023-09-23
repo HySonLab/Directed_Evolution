@@ -8,8 +8,8 @@ from functools import wraps
 from typing import List
 
 
-def split_kmers(seqs: List[str], k: int = 3) -> List[List[str]]:
-    return [[seq[i:i + k] for i in range(0, len(seq), k)] for seq in seqs]
+def split_kmers2(seqs: List[str], k: int = 3) -> List[List[str]]:
+    return [[seq[i:i + k] for i in range(len(seq) - k + 1)] for seq in seqs]
 
 
 def set_seed(seed: int):
@@ -53,32 +53,6 @@ def print_variant_in_color(seq: str,
         else:
             print(f'\033[0m{seq[j]}', end='')
     print('\033[0m')
-
-
-def save_vocabulary(save_dir: str,
-                    standard_tokens: List[str],
-                    k: int,
-                    prepend_tokens: List[str] = ["<cls>", "<pad>", "<eos>", "<unk>"],
-                    append_tokens: List[str] = ["<mask>"]) -> List[str]:
-    # Check if vocab file exists
-    filepath = os.path.join(save_dir, f"vocab_{k}.txt")
-    if os.path.exists(filepath):
-        with open(filepath, "r") as f:
-            all_tokens = [line.rstrip() for line in f]
-        return all_tokens
-
-    all_tokens = []
-    all_tokens.extend(prepend_tokens)
-    all_tokens.extend(standard_tokens)
-    for i in range((8 - (len(all_tokens) % 8)) % 8):
-        all_tokens.append(f"<null_{i  + 1}>")
-    all_tokens.extend(append_tokens)
-
-    os.makedirs(save_dir, exist_ok=True)
-    with open(filepath, "w") as f:
-        f.write('\n'.join(all_tokens))
-
-    return all_tokens
 
 
 def timer(func):
