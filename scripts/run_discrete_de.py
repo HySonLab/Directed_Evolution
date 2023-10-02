@@ -4,8 +4,7 @@ import os
 import pandas as pd
 import torch
 import torch.multiprocessing as mp
-import traceback
-from pickle import dump, load
+from pickle import load
 from typing import List, Union, Tuple
 from transformers import PreTrainedTokenizerFast
 from de.common.io_utils import read_fasta
@@ -14,21 +13,13 @@ from de.directed_evolution import DiscreteDirectedEvolution2
 from de.samplers.maskers import RandomMasker2, ImportanceMasker2
 from de.samplers.models.esm import ESM2
 from de.predictors.tranception.model import TranceptionLMHeadModel
-from de.predictors.gaussian_process import GaussianProcess
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fasta_file",
-                        nargs="+",
+    parser.add_argument("--data_file",
                         type=str,
-                        default=["../data/uniprot_sprot.fasta"],
-                        help="Path to fasta file.")
-    parser.add_argument("--csv_file",
-                        nargs="+",
-                        type=str,
-                        default=["../data/peptides/apd.csv"],
-                        help="Path to csv file.")
+                        help="Path to data file.")
     parser.add_argument("--tokenizer_file",
                         type=str,
                         default="../de/predictors/tranception/utils/tokenizers/Basic_tokenizer",
@@ -84,6 +75,13 @@ def parse_args():
                         choices=["pareto", "ranking"],
                         default="ranking",
                         help="Algorithm to choose top best fitness score.")
+    parser.add_argument("--use_tranception",
+                        action="store_true",
+                        help="Whether to use Tranception for fitness prediction.")
+    parser.add_argument("--max_mismatch",
+                        type=int,
+                        default=0,
+                        help="Maximum number of mismatches to consider similar.")
     parser.add_argument("--verbose",
                         action="store_true",
                         help="Whether to display output.")
@@ -109,35 +107,26 @@ def parse_args():
     parser.add_argument("--save_name",
                         type=str,
                         help="Filename of the result csv file.")
-    parser.add_argument("--use_tranception",
-                        action="store_true",
-                        help="Whether to use Tranception for fitness prediction.")
-    parser.add_argument("--max_mismatch",
+    parser.add_argument("--save_interval",
                         type=int,
-                        default=0,
-                        help="Maximum number of mismatches to consider similar.")
+                        default=-1,
+                        help="Interval to save results (-1 means save when finishing).")
     args = parser.parse_args()
     return args
 
 
-def get_sequence_from_fasta(fasta_files: List[str], max_seq_len: int) -> List[str]:
-    seqs = []
-    for filepath in fasta_files:
-        fasta_seqs = read_fasta(filepath, max_seq_length=max_seq_len)
-        fasta_seqs = list(fasta_seqs.values())
-        seqs.extend(fasta_seqs)
+def get_sequence_from_fasta(fasta_file: str, max_seq_len: int) -> List[str]:
+    seqs = read_fasta(fasta_file, max_seq_length=max_seq_len)
+    seqs = list(seqs.values())
     return seqs
 
 
-def extract_from_csv(csv_files: List[str]) -> Tuple[List[str], np.ndarray]:
-    seqs = []
-    targets = []
-    for filepath in csv_files:
-        df = pd.read_csv(filepath)
-        insta_idx = df.instability_index.tolist()
-        boman_idx = df.Boman_index.tolist()
-        seqs.extend(df.sequence.tolist())
-        targets.extend([[y1, y2] for y1, y2 in zip(insta_idx, boman_idx)])
+def extract_from_csv(csv_file: str) -> Tuple[List[str], np.ndarray]:
+    df = pd.read_csv(csv_file)
+    insta_idx = df.instability_index.tolist()
+    boman_idx = df.Boman_index.tolist()
+    seqs = df.sequence.tolist()
+    targets = [[y1, y2] for y1, y2 in zip(insta_idx, boman_idx)]
     targets = np.array(targets, dtype=np.float32)
     return seqs, targets
 
@@ -146,7 +135,7 @@ def initialize_mutation_model(args, device: torch.device):
     model = ESM2(pretrained_model_name_or_path=args.pretrained_mutation_name,
                  device=device)
     tokenizer = model.tokenizer
-    model = model.to(device)
+    model.eval()
     return model, tokenizer
 
 
@@ -161,7 +150,7 @@ def initialize_maskers(args):
 
 def intialize_fitness_predictor(args, device: Union[str, torch.device]):
     if args.use_tranception:
-        model_name = f"PascalNotin/Tranception_{args.model_size}"
+        model_name = f"PascalNotin/Tranception_{args.tranception_type}"
         model = TranceptionLMHeadModel.from_pretrained(
             pretrained_model_name_or_path=model_name
         )
@@ -173,37 +162,39 @@ def intialize_fitness_predictor(args, device: Union[str, torch.device]):
             cls_token="[CLS]",
             mask_token="[MASK]"
         )
-        model = model.to(device)
+        model.to(device)
+        model.eval()
     else:
         if args.pretrained_gaussian and os.path.isfile(args.pretrained_gaussian):
             with open(args.pretrained_gaussian, "rb") as f:
                 model = load(f)
         else:
-            model = GaussianProcess(k=args.k,
-                                    alphabet_size=20,
-                                    max_num_mismatch=args.max_mismatch)
+            raise ValueError("Gaussian Process has not been trained.\n"
+                             "It is recommended to run `train_gp.py` first.")
 
     return model
 
 
-def save_results(evos: List[Tuple[str, float]], output_path: str):
+def save_results(wt_seqs: List[str], evos: List[Tuple[str, float]], output_path: str):
     output_dir = os.path.dirname(output_path)
     os.makedirs(output_dir, exist_ok=True)
     mutants, score = zip(*evos)
-    df = pd.DataFrame.from_dict({"mutants": list(mutants), "score": list(score)})
+    df = pd.DataFrame.from_dict({"WT": wt_seqs, "mutants": list(mutants), "score": list(score)})
     df.to_csv(output_path, index=False)
 
 
 def main(args):
     # Set up multiprocessing
-    # torch.set_num_threads(1)
-    # mp.set_start_method("spawn", force=True)
+    mp.set_start_method("spawn", force=True)
+    os.environ["OMP_NUM_THREADS"] = "1"
 
     # Get sequences
-    if not args.use_tranception:
-        sequences, targets = extract_from_csv(args.csv_file)
+    if args.data_file.endswith(".csv"):
+        sequences, targets = extract_from_csv(args.data_file)
+    elif args.data_file.endswith(".fasta"):
+        sequences = get_sequence_from_fasta(args.data_file, args.max_sequence_length)
     else:
-        sequences = get_sequence_from_fasta(args.fasta_file, args.max_sequence_length)
+        raise ValueError("Data type is not supported.")
 
     # Init env stuffs
     set_seed(args.seed) if args.set_seed_only else enable_full_deterministic(args.seed)
@@ -216,13 +207,6 @@ def main(args):
 
     # Init masker
     maskers = initialize_maskers(args)
-
-    # pre-fit Gaussian Process
-    if not args.use_tranception and not os.path.isfile(args.pretrained_gaussian):
-        fitness_predictor.fit(sequences, targets)
-        with open(args.pretrained_gaussian, "wb") as f:
-            dump(fitness_predictor, f)
-        # fitness_predictor.save_model(args.pretrained_gaussian)
 
     # Init procedure
     direct_evo = DiscreteDirectedEvolution2(
@@ -242,26 +226,46 @@ def main(args):
         verbose=args.verbose,
     )
 
-    evos = []
-    for seq in sequences:
-        evo = direct_evo(seq)
-        evos.append(evo)
+    # final_evos = []
+    # start_idx = 0
+    # for i, seq in enumerate(sequences[:1]):
+    #     evo = direct_evo(seq)
+    #     final_evos.append(evo)
+    #     if args.save_interval > 0 and i != 0 and i % args.save_interval == 0:
+    #         filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
+    #         filepath = os.path.join(args.result_dir, f"batch_{str(i)}_{filename}")
+    #         save_results(sequences[start_idx:i + 1], final_evos, filepath)
+    #         start_idx = i
+    #         final_evos = []
 
-    # try:
-    #     pool = mp.Pool(processes=args.num_processes)
-    #     evos = pool.map(direct_evo, sequences[:100])
-    # except Exception as e:
-    #     print(traceback.format_exc())
-    #     print("Main Pool Error:", e)
-    # except KeyboardInterrupt:
-    #     exit()
-    # finally:
-    #     pool.terminate()
-    #     pool.join()
+    final_evos = []
+    pool = mp.Pool(processes=args.num_processes)
+    full_length = len(sequences)
+    if args.save_interval > 0:
+        sequences = [sequences[i * args.save_interval:(i + 1) * args.save_interval]
+                     for i in range((len(sequences) + args.save_interval - 1) // args.save_interval)]
+    if isinstance(sequences[0], list):
+        for i, seqs in enumerate(sequences):
+            evos = pool.map(direct_evo, seqs)
+            filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
+            filepath = os.path.join(
+                args.result_dir,
+                f"batch_{i * args.save_interval}-{(i + 1) * args.save_interval - 1}_{filename}"
+                if (i + 1) * args.save_interval < full_length
+                else f"batch_{i * args.save_interval}-{full_length - 1}_{filename}"
+            )
+            save_results(seqs, evos, filepath)
+            final_evos.extend(evos)
+            evos = []
+    else:
+        final_evos = pool.map(direct_evo, sequences)
+
+    pool.close()
+    pool.join()
 
     filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
     filepath = os.path.join(args.result_dir, filename)
-    save_results(evos, filepath)
+    save_results(sequences, final_evos, filepath)
 
 
 if __name__ == "__main__":

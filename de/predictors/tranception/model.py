@@ -1054,6 +1054,7 @@ class TranceptionLMHeadModel(GPT2PreTrainedModel):
                                           'avg_score'
                                       ])
             all_scores = pd.concat([all_scores, wt_row], ignore_index=True)
+        all_scores["mutant"].fillna("", inplace=True)
         return all_scores
 
     def encode_batch(self,

@@ -2,6 +2,7 @@ import itertools
 import numpy as np
 import pandas as pd
 import torch
+from copy import deepcopy
 from datetime import datetime
 from operator import itemgetter
 from typing import List, Tuple, Union
@@ -54,6 +55,8 @@ class DiscreteDirectedEvolution2:
             self.population_ratio_per_mask = [1 / len(maskers) for _ in range(len(maskers))]
 
         self.mutation_logger = None
+        if use_tranception:
+            self.prev_fitness = None
         # Checks
         if self.n_steps < 1:
             raise ValueError("`n_steps` must be >= 1")
@@ -164,9 +167,21 @@ class DiscreteDirectedEvolution2:
                                                                   self.scoring_mirror,
                                                                   self.batch_size_inference,
                                                                   self.num_workers)
+            log_fitness_df = log_fitness_df if self.prev_fitness is None \
+                else pd.concat([log_fitness_df, self.prev_fitness], ignore_index=True)
             top_fitness = log_fitness_df.nlargest(n=self.population,
                                                   columns="avg_score",
                                                   keep="first")
+            self.prev_fitness = top_fitness
+
+            # make len(top_fitness) == self.population
+            if len(top_fitness) < self.population:
+                n = self.population - len(top_fitness) + 1
+                top_fitness = pd.concat([top_fitness.iloc[[0]]] * n + [top_fitness.iloc[1:]],
+                                        ignore_index=True)
+
+            # update self.mutation_logger according to saved mutant
+            self.mutation_logger = self.mutants2logger(top_fitness.mutant.tolist())
             top_variants = top_fitness.mutated_sequence.tolist()
             top_fitness_score = top_fitness.avg_score.tolist()
         else:
@@ -213,7 +228,7 @@ class DiscreteDirectedEvolution2:
             print(f"{now}: Wild-type sequence: {wt_seq}")
 
         # Initialize
-        variants = [wt_seq] * self.population
+        variants = [wt_seq for _ in range(self.population)]
         self.mutation_logger = [{} for _ in range(self.population)]
 
         for step in range(self.n_steps):
@@ -226,11 +241,11 @@ class DiscreteDirectedEvolution2:
 
             if step != 0:
                 variants = list(itertools.chain.from_iterable(
-                    itertools.repeat(i, self.num_propose_mutation_per_variant)
+                    list(deepcopy(i) for _ in range(self.num_propose_mutation_per_variant))
                     for i in variants
                 ))
                 self.mutation_logger = list(itertools.chain.from_iterable(
-                    itertools.repeat(i, self.num_propose_mutation_per_variant)
+                    list(deepcopy(i) for _ in range(self.num_propose_mutation_per_variant))
                     for i in self.mutation_logger
                 ))
             shuffled_ids = np.random.permutation(len(variants)).tolist()
@@ -277,8 +292,9 @@ class DiscreteDirectedEvolution2:
     def mutants2logger(self, mutants: List[str]):
         logger = [{} for _ in range(len(mutants))]
         for idx, mutant in enumerate(mutants):
-            print(mutant)
+            if len(mutant) == 0:
+                continue
             for m in mutant.split(":"):
-                before, pos, after = m[0], m[1], m[2]
-                logger[idx][str(int(pos) + 1)] = [before, after]
+                before, pos, after = m[0], m[1:-1], m[-1]
+                logger[idx][pos] = [before, after]
         return logger

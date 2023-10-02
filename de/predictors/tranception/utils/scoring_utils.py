@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import re
-import tqdm
 import torch
 
 from datasets import Dataset
@@ -226,6 +225,9 @@ def get_tranception_scores_mutated_sequences(model: GPT2PreTrainedModel,
         delta_scores = scores_mutated_seq.copy()
         # In sliding mode there is a single reference window for the WT
         delta_scores[score_var_name] = delta_scores['score'] - list(scores_wt['score'])[0]
+
+    delta_scores.drop_duplicates(subset="mutated_sequence", inplace=True)
+    delta_scores["mutant"] = delta_scores["mutant"].replace(np.nan, '', regex=True)
     return delta_scores[['mutated_sequence', 'mutant', score_var_name]]
 
 
@@ -278,6 +280,7 @@ def get_sequence_slices(df: pd.DataFrame,
                      errors="ignore")
 
         df_wt = df.copy()
+        df_wt["mutant"] = ""
         df_wt['mutated_sequence'] = [target_seq] * num_mutants
         # For indels, we set the wild type reference to be always the same (full length) sequence.
         # We assume here that the length is lower than model context size
@@ -290,13 +293,14 @@ def get_sequence_slices(df: pd.DataFrame,
             for index in range(num_mutants)
         ]
         df = pd.concat([df, df_wt], axis=0)
-        df = df.drop_duplicates()
+        df.drop_duplicates(inplace=True)
     elif scoring_window == "sliding":
         num_windows = 1 + int(len_target_seq / model_context_len)
         df_list = []
         start = 0
         for window_index in range(1, num_windows + 1):
             df_sliced = df.copy()
+            df_sliced["mutant"] = ""
             df_sliced['sliced_mutated_sequence'] = df_sliced[
                 'mutated_sequence'].map(
                     lambda x: x[start:start + model_context_len])
