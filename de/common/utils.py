@@ -5,11 +5,16 @@ import torch
 import random
 from datetime import datetime
 from functools import wraps
+from polyleven import levenshtein
 from typing import List
 
 
 def split_kmers2(seqs: List[str], k: int = 3) -> List[List[str]]:
     return [[seq[i:i + k] for i in range(len(seq) - k + 1)] for seq in seqs]
+
+
+def edit_distance(seq1: str, seq2: str) -> int:
+    return levenshtein(seq1, seq2)
 
 
 def set_seed(seed: int):

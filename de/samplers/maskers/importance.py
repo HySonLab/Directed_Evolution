@@ -59,7 +59,10 @@ class ImportanceMasker2(BaseMasker):
                 seq_entropy += kmer2entropy[kmer]
 
             for kmer, tfidf in zip(setseq, seq_tfidfs):
-                kmer2imp[kmer] = tfidf / seq_tfidf + kmer2entropy[kmer] / seq_entropy
+                try:
+                    kmer2imp[kmer] = tfidf / seq_tfidf + kmer2entropy[kmer] / seq_entropy
+                except ZeroDivisionError:
+                    kmer2imp[kmer] = tfidf / seq_tfidf
 
             importances.append(kmer2imp)
 
@@ -67,17 +70,12 @@ class ImportanceMasker2(BaseMasker):
 
     def _get_entropy_of_unique_tokens(self, seqs: List[List[str]]):
         bag_of_toks = list(itertools.chain.from_iterable(seqs))
-        total_tokens = len(bag_of_toks)
-        count = {}
-        for tok in bag_of_toks:
-            if tok in count:
-                count[tok] += 1
-            else:
-                count[tok] = 1
+        set_toks = set(bag_of_toks)
+        count = {tok: bag_of_toks.count(tok) for tok in set_toks}
 
         entropy = {}
         for k, v in count.items():
-            prob = v / total_tokens
+            prob = v / len(bag_of_toks)
             entropy[k] = -1.0 * prob * math.log(prob)
 
         return entropy

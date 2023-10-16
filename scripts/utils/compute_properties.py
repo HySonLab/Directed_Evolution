@@ -5,6 +5,7 @@ import os
 from modlamp.descriptors import GlobalDescriptor
 from typing import List
 from de.common.io_utils import read_fasta
+from de.predictors.tranception.utils.scoring_utils import get_mutated_sequence
 
 
 def parse_args():
@@ -23,7 +24,14 @@ def parse_args():
 
 def get_sequence_from_fasta(fasta_file: str):
     fasta_seqs = read_fasta(fasta_file)
-    return list(set(fasta_seqs.values()))   # remove duplications
+    return fasta_seqs.values()
+
+
+def get_sequence_from_csv(csv_file: str):
+    df = pd.read_csv(csv_file)
+    df["mutants"].fillna("", inplace=True)
+    df["mutated_sequence"] = df.apply(lambda x: get_mutated_sequence(x["WT"], x["mutants"]), axis=1)
+    return df.mutated_sequence.tolist()
 
 
 def compute_properties(seqs: List[str]) -> np.ndarray:
@@ -49,9 +57,13 @@ def main(args):
     header = ["sequence", "instability_index", "Boman_index", "charge_density"]
     sequences = []
     for filepath in args.data_files:
-        seqs = get_sequence_from_fasta(filepath)
+        if filepath.endswith(".fasta"):
+            seqs = get_sequence_from_fasta(filepath)
+        elif filepath.endswith(".csv"):
+            seqs = get_sequence_from_csv(filepath)
         sequences.extend(seqs)
 
+    # sequences = list(set(sequences))
     insta_idx, boman_idx, charge_density = compute_properties(sequences)
     save_path = os.path.join(
         os.path.dirname(filepath),

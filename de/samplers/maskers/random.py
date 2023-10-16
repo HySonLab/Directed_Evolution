@@ -24,7 +24,7 @@ class RandomMasker2(BaseMasker):
 
         lseq = list(seq)
         min_pos = 0
-        max_pos = len(lseq) - self.k
+        max_pos = len(lseq) - self.k + 1
 
         candidate_masked_pos = list(range(min_pos, max_pos))
         random.shuffle(candidate_masked_pos)

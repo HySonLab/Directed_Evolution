@@ -4,15 +4,14 @@ import os
 import pandas as pd
 import torch
 import torch.multiprocessing as mp
-from pickle import load
 from typing import List, Union, Tuple
 from transformers import PreTrainedTokenizerFast
-from de.common.io_utils import read_fasta
 from de.common.utils import set_seed, enable_full_deterministic
 from de.directed_evolution import DiscreteDirectedEvolution2
 from de.samplers.maskers import RandomMasker2, ImportanceMasker2
 from de.samplers.models.esm import ESM2
 from de.predictors.tranception.model import TranceptionLMHeadModel
+from de.predictors.attention.module import ESM2DecoderModule, ESM2_Attention
 
 
 def parse_args():
@@ -24,6 +23,12 @@ def parse_args():
                         type=str,
                         default="../de/predictors/tranception/utils/tokenizers/Basic_tokenizer",
                         help="Tokenizer file to initialize Tranception's tokenizer.")
+    parser.add_argument("--wt",
+                        type=str,
+                        help="Amino acid sequence.")
+    parser.add_argument("--wt_fitness",
+                        type=float,
+                        help="Wild-type sequence's fitness.")
     parser.add_argument("--max_sequence_length",
                         type=int,
                         default=-1,
@@ -44,6 +49,12 @@ def parse_args():
                         type=int,
                         default=1,
                         help="Split sequence into multiple tokens with length `k`.")
+    parser.add_argument("--unconditional",
+                        action="store_true",
+                        help="Whether to perform conditional or unconditional task.")
+    parser.add_argument("--rm_dups",
+                        action="store_true",
+                        help="Whether to remove duplications in the proposed candidate pool.")
     parser.add_argument("--tranception_type",
                         type=str,
                         choices=["Small", "Medium", "Large"],
@@ -51,7 +62,7 @@ def parse_args():
                         help="Choose Tranception model size.")
     parser.add_argument("--pretrained_gaussian",
                         type=str,
-                        help="Path to pretrained Gaussian Process model (saving or loading).")
+                        help="Path to pretrained Gaussian Process model.")
     parser.add_argument("--population_ratio_per_mask",
                         nargs="+",
                         type=float,
@@ -60,6 +71,13 @@ def parse_args():
                         type=str,
                         default="facebook/esm2_t12_35M_UR50D",
                         help="Pretrained model name or path for mutation checkpoint.")
+    parser.add_argument("--dec_hidden_size",
+                        type=int,
+                        default=1024,
+                        help="Decoder hidden size (for conditional task).")
+    parser.add_argument("--predictor_ckpt_path",
+                        type=str,
+                        help="Path to fitness predictor checkpoints.")
     parser.add_argument("--num_masked_tokens",
                         type=int,
                         default=1,
@@ -75,13 +93,17 @@ def parse_args():
                         choices=["pareto", "ranking"],
                         default="ranking",
                         help="Algorithm to choose top best fitness score.")
-    parser.add_argument("--use_tranception",
+    parser.add_argument("--use_gaussian",
                         action="store_true",
-                        help="Whether to use Tranception for fitness prediction.")
+                        help="Whether to use Gaussian Process for fitness prediction.")
     parser.add_argument("--max_mismatch",
                         type=int,
                         default=0,
                         help="Maximum number of mismatches to consider similar.")
+    parser.add_argument("--start_index",
+                        type=int,
+                        default=0,
+                        help="Continue to run from `start_index` sequence in csv file.")
     parser.add_argument("--verbose",
                         action="store_true",
                         help="Whether to display output.")
@@ -115,26 +137,17 @@ def parse_args():
     return args
 
 
-def get_sequence_from_fasta(fasta_file: str, max_seq_len: int) -> List[str]:
-    seqs = read_fasta(fasta_file, max_seq_length=max_seq_len)
-    seqs = list(seqs.values())
-    return seqs
-
-
 def extract_from_csv(csv_file: str) -> Tuple[List[str], np.ndarray]:
     df = pd.read_csv(csv_file)
-    insta_idx = df.instability_index.tolist()
-    boman_idx = df.Boman_index.tolist()
+    targets = df["fitness"].to_numpy(dtype=np.float32)
     seqs = df.sequence.tolist()
-    targets = [[y1, y2] for y1, y2 in zip(insta_idx, boman_idx)]
-    targets = np.array(targets, dtype=np.float32)
     return seqs, targets
 
 
 def initialize_mutation_model(args, device: torch.device):
-    model = ESM2(pretrained_model_name_or_path=args.pretrained_mutation_name,
-                 device=device)
+    model = ESM2(pretrained_model_name_or_path=args.pretrained_mutation_name)
     tokenizer = model.tokenizer
+    model.to(device)
     model.eval()
     return model, tokenizer
 
@@ -149,7 +162,7 @@ def initialize_maskers(args):
 
 
 def intialize_fitness_predictor(args, device: Union[str, torch.device]):
-    if args.use_tranception:
+    if args.unconditional:
         model_name = f"PascalNotin/Tranception_{args.tranception_type}"
         model = TranceptionLMHeadModel.from_pretrained(
             pretrained_model_name_or_path=model_name
@@ -165,46 +178,42 @@ def intialize_fitness_predictor(args, device: Union[str, torch.device]):
         model.to(device)
         model.eval()
     else:
-        if args.pretrained_gaussian and os.path.isfile(args.pretrained_gaussian):
-            with open(args.pretrained_gaussian, "rb") as f:
-                model = load(f)
+        if args.use_gaussian:
+            pass
         else:
-            raise ValueError("Gaussian Process has not been trained.\n"
-                             "It is recommended to run `train_gp.py` first.")
+            decoder = ESM2_Attention(args.pretrained_mutation_name, hidden_dim=args.dec_hidden_size)
+            model = ESM2DecoderModule.load_from_checkpoint(
+                args.predictor_ckpt_path, map_location=device, net=decoder
+            )
+            model.eval()
 
     return model
 
 
-def save_results(wt_seqs: List[str], evos: List[Tuple[str, float]], output_path: str):
+def save_results(wt_seqs: List[str], mutants, score, output_path: str):
     output_dir = os.path.dirname(output_path)
     os.makedirs(output_dir, exist_ok=True)
-    mutants, score = zip(*evos)
-    df = pd.DataFrame.from_dict({"WT": wt_seqs, "mutants": list(mutants), "score": list(score)})
+    df = pd.DataFrame.from_dict({"WT": wt_seqs, "mutants": mutants, "score": score})
     df.to_csv(output_path, index=False)
 
 
 def main(args):
     # Set up multiprocessing
-    mp.set_start_method("spawn", force=True)
-    os.environ["OMP_NUM_THREADS"] = "1"
+    # mp.set_start_method("spawn", force=True)
+    # os.environ["OMP_NUM_THREADS"] = "1"
 
     # Get sequences
-    if args.data_file.endswith(".csv"):
-        sequences, targets = extract_from_csv(args.data_file)
-    elif args.data_file.endswith(".fasta"):
-        sequences = get_sequence_from_fasta(args.data_file, args.max_sequence_length)
-    else:
-        raise ValueError("Data type is not supported.")
+    # sequences, targets = extract_from_csv(args.data_file)
 
     # Init env stuffs
     set_seed(args.seed) if args.set_seed_only else enable_full_deterministic(args.seed)
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = 'true'
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     device = torch.device("cpu")
 
     # Init models
     mutation_model, mutation_tokenizer = initialize_mutation_model(args, device)
     fitness_predictor = intialize_fitness_predictor(args, device)
-
     # Init masker
     maskers = initialize_maskers(args)
 
@@ -217,14 +226,22 @@ def main(args):
         mutation_tokenizer=mutation_tokenizer,
         fitness_predictor=fitness_predictor,
         fitness_optim=args.fitness_optim,
+        conditional_task=not args.unconditional,
+        remove_duplications=args.rm_dups,
         k=args.k,
         population_ratio_per_mask=args.population_ratio_per_mask,
-        use_tranception=args.use_tranception,
+        use_gaussian=args.use_gaussian,
         scoring_mirror=args.scoring_mirror,
         batch_size_inference=args.batch_size,
         num_propose_mutation_per_variant=args.num_proposes_per_var,
         verbose=args.verbose,
     )
+
+    mutants, fitnesses = direct_evo(args.wt, args.wt_fitness)
+    fitnesses = fitnesses.squeeze(1).numpy().tolist()
+    filename = args.save_name or "results_" + os.path.basename(args.data_file[0])
+    filepath = os.path.join(args.result_dir, filename)
+    save_results([args.wt] * len(mutants), mutants, fitnesses, filepath)
 
     # final_evos = []
     # start_idx = 0
@@ -238,34 +255,37 @@ def main(args):
     #         start_idx = i
     #         final_evos = []
 
-    final_evos = []
-    pool = mp.Pool(processes=args.num_processes)
-    full_length = len(sequences)
-    if args.save_interval > 0:
-        sequences = [sequences[i * args.save_interval:(i + 1) * args.save_interval]
-                     for i in range((len(sequences) + args.save_interval - 1) // args.save_interval)]
-    if isinstance(sequences[0], list):
-        for i, seqs in enumerate(sequences):
-            evos = pool.map(direct_evo, seqs)
-            filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
-            filepath = os.path.join(
-                args.result_dir,
-                f"batch_{i * args.save_interval}-{(i + 1) * args.save_interval - 1}_{filename}"
-                if (i + 1) * args.save_interval < full_length
-                else f"batch_{i * args.save_interval}-{full_length - 1}_{filename}"
-            )
-            save_results(seqs, evos, filepath)
-            final_evos.extend(evos)
-            evos = []
-    else:
-        final_evos = pool.map(direct_evo, sequences)
+    # sequences = sequences[args.start_index:]
 
-    pool.close()
-    pool.join()
+    # final_evos = []
+    # full_length = len(sequences)
+    # pool = mp.Pool(processes=args.num_processes)
+    # if args.save_interval > 0:
+    #     sequences = [sequences[i * args.save_interval:(i + 1) * args.save_interval]
+    #                  for i in range((len(sequences) + args.save_interval - 1) // args.save_interval)]
+    # if isinstance(sequences[0], list):
+    #     for i, seqs in enumerate(sequences):
+    #         evos = pool.map(direct_evo, seqs)
+    #         filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
+    #         filepath = os.path.join(
+    #             args.result_dir,
+    #             f"batch_{args.start_index + i * args.save_interval}-"
+    #             f"{args.start_index + (i + 1) * args.save_interval - 1}_{filename}"
+    #             if (i + 1) * args.save_interval < full_length
+    #             else f"batch_{i * args.save_interval}-{full_length - 1}_{filename}"
+    #         )
+    #         save_results(seqs, evos, filepath)
+    #         final_evos.extend(evos)
+    #         evos = []
+    # else:
+    #     final_evos = pool.map(direct_evo, sequences)
 
-    filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
-    filepath = os.path.join(args.result_dir, filename)
-    save_results(sequences, final_evos, filepath)
+    # pool.close()
+    # pool.join()
+
+    # filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
+    # filepath = os.path.join(args.result_dir, filename)
+    # save_results(tmp_seqs, final_evos, filepath)
 
 
 if __name__ == "__main__":

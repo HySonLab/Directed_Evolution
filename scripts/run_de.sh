@@ -1,5 +1,3 @@
 #!/bin/bash
 
-num_processes=$1
-
-python run_discrete_de.py --max_sequence_length 1024 --n_steps 30 --population 10 --num_masked_tokens 1 --verbose --num_processes $num_processes --k 1 --tranception_type Small --mask_high_importance --num_proposes_per_var 5 --fasta_file ../data/part-0.fasta
+python run_discrete_de.py --wt SKGEELFTGVVPILVELDGDVNGHKFSVSGEGEGDATYGKLTLKFICTTGKLPVPWPTLVTTLSYGVQCFSRYPDHMKQHDFFKSAMPEGYVQERTIFFKDDGNYKTRAEVKFEGDTLVNRIELKGIDFKEDGNILGHKLEYNYNSHNVYIMADKQKNGIKVNFKIRHNIEDGSVQLADHYQQNTPIGDGPVLLPDNHYLSTQSALSKDPNEKRDHMVLLEFVTAAGITHGMDELYK --wt_fitness 3.7192121319 --n_steps 60 --population 128 --num_proposes_per_var 4 --rm_dups --predictor_ckpt_path /home/thanhtvt1/workspace/Directed_Evolution/exps/checkpoints/esm_dec-avGFPepoch=29-val_loss=0.130.ckpt --verbose --save_name results_avGVF_steps60_pop128_pros4_seed0.csv

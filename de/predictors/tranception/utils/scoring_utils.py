@@ -28,6 +28,8 @@ def get_mutated_sequence(focus_seq: str,
     Returns:
         (str): mutated sequence.
     """
+    if mutant == "":
+        return focus_seq
     mutated_seq = list(focus_seq)
     for mutation in mutant.split(":"):
         try:

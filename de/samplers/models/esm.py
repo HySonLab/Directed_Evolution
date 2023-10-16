@@ -1,23 +1,18 @@
 import torch
 from transformers import AutoTokenizer, EsmForMaskedLM, BatchEncoding
-from typing import List, Union
+from typing import List
 
 
 class ESM2(torch.nn.Module):
-    def __init__(self,
-                 pretrained_model_name_or_path: str = "facebook/esm2_t12_35M_UR50D",
-                 device: Union[str, torch.device] = "cpu"):
+    def __init__(self, pretrained_model_name_or_path: str = "facebook/esm2_t12_35M_UR50D"):
         """
         Args:
             pretrained_model_name_or_path (str): Pre-trained model to load.
-            device (str): device to be used.
         """
         super(ESM2, self).__init__()
-        self.device = device
-        if pretrained_model_name_or_path is not None:
-            self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
-            self.model = EsmForMaskedLM.from_pretrained(pretrained_model_name_or_path)
-        self.model.to(self.device)
+        assert pretrained_model_name_or_path is not None
+        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+        self.model = EsmForMaskedLM.from_pretrained(pretrained_model_name_or_path)
 
     def tokenize(self, inputs: List[str]) -> BatchEncoding:
         """Convert inputs to a format suitable for the model.
@@ -32,7 +27,7 @@ class ESM2(torch.nn.Module):
                                         add_special_tokens=True,
                                         return_tensors="pt",
                                         padding=True)
-        return encoded_inputs.to(self.device)
+        return encoded_inputs
 
     def decode(self, tokens: torch.Tensor) -> List[str]:
         """Decode predicted tokens into alphabet characters
@@ -54,5 +49,5 @@ class ESM2(torch.nn.Module):
         Returns:
             logits (torch.Tensor): Logits.
         """
-        results = self.model(**inputs)
+        results = self.model(output_hidden_states=True, **inputs)
         return results
