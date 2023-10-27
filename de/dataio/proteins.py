@@ -15,7 +15,7 @@ class ProteinDataset(Dataset):
         """
         self.data = pd.read_csv(csv_file)
         self.tokenizer = tokenizer
-        self.max_length = max_length
+        self.max_length = max_length or max(self.data["sequence"].apply(lambda x: len(x)).to_list())
 
     def __len__(self):
         return len(self.data)
@@ -32,6 +32,7 @@ class ProteinDataset(Dataset):
         input_ids = self.tokenizer(sequences,
                                    add_special_tokens=True,
                                    truncation=True,
+                                   padding="max_length",
                                    max_length=self.max_length)["input_ids"]
         return {"input_ids": torch.tensor(input_ids, dtype=torch.long),
                 "fitness": torch.tensor(fitnesses, dtype=torch.float32)}

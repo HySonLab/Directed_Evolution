@@ -91,8 +91,8 @@ class ESM2DecoderModule(LightningModule):
         self.val_loss(loss)
         self.valid_mae(preds, targets)
         self.valid_mse(preds, targets)
-        self.log("val_loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val_mae", self.train_mae, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_mae", self.valid_mae, on_step=False, on_epoch=True, prog_bar=True)
 
     def on_validation_epoch_end(self) -> None:
         mae = self.valid_mae.compute()  # get current mae

@@ -111,7 +111,6 @@ class ImportanceMasker2(BaseMasker):
         for _ in range(self.max_subs):
             try:
                 pos = kmer_seq.index(list(sorted_kmers_by_imps.keys())[curr_idx], start_pos)
-                start_pos = pos
             except ValueError:
                 curr_idx += 1
                 start_pos = 0
@@ -119,6 +118,7 @@ class ImportanceMasker2(BaseMasker):
             finally:
                 lseq[pos:pos + self.k] = [self.mask_token] * self.k
                 positions.append(pos)
+                start_pos = pos + 1
 
         if self.k == 1:
             return ''.join(lseq), positions

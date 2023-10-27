@@ -29,7 +29,7 @@ def parse_args():
                         help="Hidden dim of decoder.")
     parser.add_argument("--batch_size",
                         type=int,
-                        default=32,
+                        default=128,
                         help="Batch size.")
     parser.add_argument("--ckpt_path",
                         type=str,
@@ -133,7 +133,7 @@ def train(args):
         callbacks.RichProgressBar(),
         callbacks.ModelCheckpoint(
             dirpath=os.path.join(args.output_dir, "checkpoints"),
-            filename=f"esm_dec-{args.dataset_name}" + "{epoch:02d}-{val_loss:.3f}",
+            filename=f"esm_dec-{args.dataset_name}_" + "{epoch:02d}-{val_loss:.3f}",
             monitor="val_loss",
             verbose=True,
             save_top_k=args.num_ckpts,
