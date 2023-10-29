@@ -6,9 +6,9 @@ from copy import deepcopy
 from datetime import datetime
 from operator import itemgetter
 from typing import List, Tuple, Union
+from transformers import PreTrainedTokenizer
 from de.common.utils import timer
 from de.samplers.maskers import BaseMasker
-from transformers import PreTrainedTokenizer
 
 
 class DiscreteDirectedEvolution2:
@@ -19,7 +19,6 @@ class DiscreteDirectedEvolution2:
                  mutation_model: torch.nn.Module,
                  mutation_tokenizer: PreTrainedTokenizer,
                  fitness_predictor: Union[torch.nn.Module, object],
-                 fitness_optim: str = "ranking",
                  conditional_task: bool = True,
                  remove_duplications: bool = False,
                  k: int = 3,
@@ -29,7 +28,8 @@ class DiscreteDirectedEvolution2:
                  batch_size_inference: int = 5,
                  num_propose_mutation_per_variant: int = 5,
                  verbose: bool = False,
-                 num_workers: int = 16):
+                 num_workers: int = 16,
+                 mutation_device: Union[torch.device, str] = "cpu"):
         """Main class for Discrete-space Directed Evolution
 
         Args:
@@ -43,7 +43,6 @@ class DiscreteDirectedEvolution2:
         self.mutation_model = mutation_model
         self.mutation_tokenizer = mutation_tokenizer
         self.fitness_predictor = fitness_predictor
-        self.fitness_optim = fitness_optim
         self.conditional_task = conditional_task
         self.rm_dups = remove_duplications
         self.k = k
@@ -53,6 +52,7 @@ class DiscreteDirectedEvolution2:
         self.num_propose_mutation_per_variant = num_propose_mutation_per_variant
         self.num_workers = num_workers
         self.verbose = verbose
+        self.mutation_device = mutation_device
 
         self.population_ratio_per_mask = population_ratio_per_mask
         if population_ratio_per_mask is None:
@@ -127,12 +127,17 @@ class DiscreteDirectedEvolution2:
 
         # <eos> token position
         eos_id = self.mutation_tokenizer.eos_token_id
-
-        # run mutation model
         masked_inputs = self.mutation_model.tokenize(masked_variants)
-        masked_outputs = self.mutation_model(masked_inputs)
-        logits = masked_outputs.logits
-        state = masked_outputs.hidden_states[-1]
+        # move to device
+        masked_inputs.to(self.mutation_device)
+        with torch.no_grad():
+            masked_outputs = self.mutation_model(masked_inputs)
+            logits = masked_outputs.logits
+            state = masked_outputs.hidden_states[-1]
+        # return to cpu
+        masked_inputs = masked_inputs.to(torch.device("cpu"))
+        logits = logits.to(torch.device("cpu"))
+        state = state.to(torch.device("cpu"))
 
         log_probs = torch.nn.functional.log_softmax(logits, dim=-1)  # [N, seq_len, vocab_size]
         # actual seq_len are similar => hard fix to prevent <eos> prediction at the end of seq.
@@ -286,7 +291,11 @@ class DiscreteDirectedEvolution2:
         final_rank = np.argsort(rank_point)
         return final_rank.tolist()
 
-    def __call__(self, wt_seq: str, wt_fitness: float = 0.):
+    def __call__(self,
+                 wt_seq: str,
+                 wt_fitness: float,
+                 seqs: List[str] = None,
+                 seqs_fitness: List[float] = None):
         """Run the discrete-space directed evolution
 
         Args:
@@ -301,11 +310,19 @@ class DiscreteDirectedEvolution2:
             print(f"{now}: Wild-type sequence: {wt_seq}")
 
         # Initialize
-        variants = [wt_seq for _ in range(self.population)]
-        self.mutation_logger = [{} for _ in range(self.population)]
-        self.prev_fitness = torch.tensor([[wt_fitness]], dtype=torch.float32)
-        self.prev_mutants = [""]
-        self.prev_variants = [wt_seq]
+        if seqs is None:
+            variants = [wt_seq for _ in range(self.population)]
+            self.mutation_logger = [{} for _ in range(self.population)]
+            self.prev_fitness = torch.tensor([[wt_fitness]], dtype=torch.float32)
+            self.prev_mutants = [""]
+            self.prev_variants = [wt_seq]
+        else:
+            assert seqs_fitness is not None
+            variants = seqs
+            self.mutation_logger = [{} for _ in range(len(seqs))]
+            self.prev_fitness = torch.tensor(seqs_fitness, dtype=torch.float32).unsqueeze(1)
+            self.prev_mutants = ["" for _ in range(len(seqs))]
+            self.prev_variants = seqs
 
         for step in range(self.n_steps):
             # ============================ #
@@ -315,15 +332,14 @@ class DiscreteDirectedEvolution2:
                 now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
                 print(f"\n{now}: ====== Step {step + 1} ======")
 
-            if step != 0:
-                variants = list(itertools.chain.from_iterable(
-                    list(deepcopy(i) for _ in range(self.num_propose_mutation_per_variant))
-                    for i in variants
-                ))
-                self.mutation_logger = list(itertools.chain.from_iterable(
-                    list(deepcopy(i) for _ in range(self.num_propose_mutation_per_variant))
-                    for i in self.mutation_logger
-                ))
+            variants = list(itertools.chain.from_iterable(
+                list(deepcopy(i) for _ in range(self.num_propose_mutation_per_variant))
+                for i in variants
+            ))
+            self.mutation_logger = list(itertools.chain.from_iterable(
+                list(deepcopy(i) for _ in range(self.num_propose_mutation_per_variant))
+                for i in self.mutation_logger
+            ))
             shuffled_ids = np.random.permutation(len(variants)).tolist()
             retriever = itemgetter(*shuffled_ids)
             shuffled_variants = list(retriever(variants))

@@ -73,7 +73,7 @@ def parse_args():
                         help="Pretrained model name or path for mutation checkpoint.")
     parser.add_argument("--dec_hidden_size",
                         type=int,
-                        default=1024,
+                        default=1280,
                         help="Decoder hidden size (for conditional task).")
     parser.add_argument("--predictor_ckpt_path",
                         type=str,
@@ -88,11 +88,6 @@ def parse_args():
     parser.add_argument("--scoring_mirror",
                         action="store_true",
                         help="Whether to measure fitness from right to left.")
-    parser.add_argument("--fitness_optim",
-                        type=str,
-                        choices=["pareto", "ranking"],
-                        default="ranking",
-                        help="Algorithm to choose top best fitness score.")
     parser.add_argument("--use_gaussian",
                         action="store_true",
                         help="Whether to use Gaussian Process for fitness prediction.")
@@ -133,13 +128,19 @@ def parse_args():
                         type=int,
                         default=-1,
                         help="Interval to save results (-1 means save when finishing).")
+    parser.add_argument("--devices",
+                        type=str,
+                        default="-1",
+                        help="Devices, separated by commas.")
     args = parser.parse_args()
     return args
 
 
-def extract_from_csv(csv_file: str) -> Tuple[List[str], np.ndarray]:
+def extract_from_csv(csv_file: str, top_k: int = -1) -> Tuple[List[str], np.ndarray]:
     df = pd.read_csv(csv_file)
-    targets = df["fitness"].to_numpy(dtype=np.float32)
+    if top_k != -1:
+        df = df.nlargest(top_k, columns="fitness")
+    targets = df["fitness"].to_list()
     seqs = df.sequence.tolist()
     return seqs, targets
 
@@ -158,7 +159,7 @@ def initialize_maskers(args):
                                    low_importance_mask=not args.mask_high_importance)
     rand_masker = RandomMasker2(args.k, max_subs=args.num_masked_tokens)
 
-    return [imp_masker, rand_masker]
+    return [rand_masker, imp_masker]
 
 
 def intialize_fitness_predictor(args, device: Union[str, torch.device]):
@@ -202,18 +203,20 @@ def main(args):
     # mp.set_start_method("spawn", force=True)
     # os.environ["OMP_NUM_THREADS"] = "1"
 
-    # Get sequences
-    # sequences, targets = extract_from_csv(args.data_file)
-
     # Init env stuffs
     set_seed(args.seed) if args.set_seed_only else enable_full_deterministic(args.seed)
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = 'true'
-    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-    device = torch.device("cpu")
+    cpu_device = torch.device("cpu")
+    mutation_device = torch.device("cpu" if args.devices == "-1" else f"cuda:{args.devices}")
+
+    # Get sequences
+    sequences, targets = None, None
+    if args.data_file is not None:
+        sequences, targets = extract_from_csv(args.data_file, args.population)
 
     # Init models
-    mutation_model, mutation_tokenizer = initialize_mutation_model(args, device)
-    fitness_predictor = intialize_fitness_predictor(args, device)
+    mutation_model, mutation_tokenizer = initialize_mutation_model(args, mutation_device)
+    fitness_predictor = intialize_fitness_predictor(args, cpu_device)
     # Init masker
     maskers = initialize_maskers(args)
 
@@ -225,7 +228,6 @@ def main(args):
         mutation_model=mutation_model,
         mutation_tokenizer=mutation_tokenizer,
         fitness_predictor=fitness_predictor,
-        fitness_optim=args.fitness_optim,
         conditional_task=not args.unconditional,
         remove_duplications=args.rm_dups,
         k=args.k,
@@ -235,9 +237,10 @@ def main(args):
         batch_size_inference=args.batch_size,
         num_propose_mutation_per_variant=args.num_proposes_per_var,
         verbose=args.verbose,
+        mutation_device=mutation_device,
     )
 
-    mutants, fitnesses = direct_evo(args.wt, args.wt_fitness)
+    mutants, fitnesses = direct_evo(args.wt, args.wt_fitness, sequences, targets)
     fitnesses = fitnesses.squeeze(1).numpy().tolist()
     filename = args.save_name or "results_" + os.path.basename(args.data_file[0])
     filepath = os.path.join(args.result_dir, filename)
