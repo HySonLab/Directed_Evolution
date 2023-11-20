@@ -54,6 +54,10 @@ class DiscreteDirectedEvolution2:
         self.verbose = verbose
         self.mutation_device = mutation_device
 
+        # self.log_idx = [1, 50, 100, 150, 200, 250, 300]
+        self.log_idx = [1, 10, 20, 30, 40, 50, 60]
+        # self.log_idx = [1, 20, 40, 60, 80, 100, 120]
+
         self.population_ratio_per_mask = population_ratio_per_mask
         if population_ratio_per_mask is None:
             self.population_ratio_per_mask = [1 / len(maskers) for _ in range(len(maskers))]
@@ -98,6 +102,8 @@ class DiscreteDirectedEvolution2:
             sub_ids = ids[begin_idx:begin_idx + sub_population]
             begin_idx += sub_population
 
+            if len(sub_variants) == 0:
+                continue
             masked_vars, masked_pos = masker.run(sub_variants, sub_ids)
             masked_variants.extend(masked_vars)
             masked_positions.extend(masked_pos)
@@ -305,6 +311,8 @@ class DiscreteDirectedEvolution2:
             variants (List[str]): list of protein sequences
             scores (torch.Tensor): scores for the variants
         """
+        afs = []
+        mfs = []
         if self.verbose:
             now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             print(f"{now}: Wild-type sequence: {wt_seq}")
@@ -368,6 +376,16 @@ class DiscreteDirectedEvolution2:
             inputs = enc_out if self.conditional_task and not self.use_gaussian else wt_seq
             variants, score = self.predict_fitness(inputs, wt_fitness, mutated_seqs, mutants)
 
+            if (step + 1) in self.log_idx:
+                tmp_score = score
+                if score[-1] == -100:
+                    print("Skip!!")
+                    tmp_score = score[:-1]
+                mfs.append(max(tmp_score))
+                afs.append(np.mean(tmp_score))
+
+        print("mfs:", mfs)
+        print("afs:", afs)
         return (self.prev_mutants, self.prev_fitness)
 
         # Return best variant

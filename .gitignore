@@ -5,3 +5,4 @@ uniref*/
 *.fasta
 exps/
 wandb/
+*.pdf
