@@ -3,14 +3,11 @@ import numpy as np
 import os
 import pandas as pd
 import torch
-import torch.multiprocessing as mp
 from typing import List, Union, Tuple
-from transformers import PreTrainedTokenizerFast
 from de.common.utils import set_seed, enable_full_deterministic
 from de.directed_evolution import DiscreteDirectedEvolution2
 from de.samplers.maskers import RandomMasker2, ImportanceMasker2
 from de.samplers.models.esm import ESM2
-from de.predictors.tranception.model import TranceptionLMHeadModel
 from de.predictors.attention.module import ESM2DecoderModule, ESM2_Attention
 
 
@@ -19,50 +16,32 @@ def parse_args():
     parser.add_argument("--data_file",
                         type=str,
                         help="Path to data file.")
-    parser.add_argument("--tokenizer_file",
-                        type=str,
-                        default="../de/predictors/tranception/utils/tokenizers/Basic_tokenizer",
-                        help="Tokenizer file to initialize Tranception's tokenizer.")
     parser.add_argument("--wt",
                         type=str,
                         help="Amino acid sequence.")
     parser.add_argument("--wt_fitness",
                         type=float,
+                        default=-100,
                         help="Wild-type sequence's fitness.")
-    parser.add_argument("--max_sequence_length",
-                        type=int,
-                        default=-1,
-                        help="Maximum sequence length accepted.")
     parser.add_argument("--n_steps",
                         type=int,
-                        default=30,
+                        default=100,
                         help="No. steps to run directed evolution.")
     parser.add_argument("--population",
                         type=int,
-                        default=20,
+                        default=128,
                         help="No. population per step.")
     parser.add_argument("--num_proposes_per_var",
                         type=int,
-                        default=10,
+                        default=4,
                         help="Number of proposed mutations for each variant in the pool.")
     parser.add_argument("--k",
                         type=int,
                         default=1,
                         help="Split sequence into multiple tokens with length `k`.")
-    parser.add_argument("--unconditional",
-                        action="store_true",
-                        help="Whether to perform conditional or unconditional task.")
     parser.add_argument("--rm_dups",
                         action="store_true",
                         help="Whether to remove duplications in the proposed candidate pool.")
-    parser.add_argument("--tranception_type",
-                        type=str,
-                        choices=["Small", "Medium", "Large"],
-                        default="Small",
-                        help="Choose Tranception model size.")
-    parser.add_argument("--pretrained_gaussian",
-                        type=str,
-                        help="Path to pretrained Gaussian Process model.")
     parser.add_argument("--population_ratio_per_mask",
                         nargs="+",
                         type=float,
@@ -85,27 +64,9 @@ def parse_args():
     parser.add_argument("--mask_high_importance",
                         action="store_true",
                         help="Whether to mask high-importance token in the sequence.")
-    parser.add_argument("--scoring_mirror",
-                        action="store_true",
-                        help="Whether to measure fitness from right to left.")
-    parser.add_argument("--use_gaussian",
-                        action="store_true",
-                        help="Whether to use Gaussian Process for fitness prediction.")
-    parser.add_argument("--max_mismatch",
-                        type=int,
-                        default=0,
-                        help="Maximum number of mismatches to consider similar.")
-    parser.add_argument("--start_index",
-                        type=int,
-                        default=0,
-                        help="Continue to run from `start_index` sequence in csv file.")
     parser.add_argument("--verbose",
                         action="store_true",
                         help="Whether to display output.")
-    parser.add_argument("--batch_size",
-                        type=int,
-                        default=10,
-                        help="Batch size for inference.")
     parser.add_argument("--seed",
                         type=int,
                         default=0,
@@ -113,21 +74,17 @@ def parse_args():
     parser.add_argument("--set_seed_only",
                         action="store_true",
                         help="Whether to enable full determinism or set random seed only.")
-    parser.add_argument("--num_processes",
-                        type=int,
-                        default=mp.cpu_count() // 2,
-                        help="No. cpus used for multi-processing.")
     parser.add_argument("--result_dir",
                         type=str,
-                        default="/home/thanhtvt1/workspace/Directed_Evolution/exps/results",
+                        default=os.path.abspath("../exps/results"),
                         help="Directory to save result csv file.")
+    parser.add_argument("--log_dir",
+                        type=str,
+                        default=os.path.abspath("../exps/logs"),
+                        help="Directory to save logfile")
     parser.add_argument("--save_name",
                         type=str,
                         help="Filename of the result csv file.")
-    parser.add_argument("--save_interval",
-                        type=int,
-                        default=-1,
-                        help="Interval to save results (-1 means save when finishing).")
     parser.add_argument("--devices",
                         type=str,
                         default="-1",
@@ -163,30 +120,11 @@ def initialize_maskers(args):
 
 
 def intialize_fitness_predictor(args, device: Union[str, torch.device]):
-    if args.unconditional:
-        model_name = f"PascalNotin/Tranception_{args.tranception_type}"
-        model = TranceptionLMHeadModel.from_pretrained(
-            pretrained_model_name_or_path=model_name
-        )
-        model.config.tokenizer = PreTrainedTokenizerFast(
-            tokenizer_file=args.tokenizer_file,
-            unk_token="[UNK]",
-            sep_token="[SEP]",
-            pad_token="[PAD]",
-            cls_token="[CLS]",
-            mask_token="[MASK]"
-        )
-        model.to(device)
-        model.eval()
-    else:
-        if args.use_gaussian:
-            pass
-        else:
-            decoder = ESM2_Attention(args.pretrained_mutation_name, hidden_dim=args.dec_hidden_size)
-            model = ESM2DecoderModule.load_from_checkpoint(
-                args.predictor_ckpt_path, map_location=device, net=decoder
-            )
-            model.eval()
+    decoder = ESM2_Attention(args.pretrained_mutation_name, hidden_dim=args.dec_hidden_size)
+    model = ESM2DecoderModule.load_from_checkpoint(
+        args.predictor_ckpt_path, map_location=device, net=decoder
+    )
+    model.eval()
 
     return model
 
@@ -223,16 +161,13 @@ def main(args):
         mutation_model=mutation_model,
         mutation_tokenizer=mutation_tokenizer,
         fitness_predictor=fitness_predictor,
-        conditional_task=not args.unconditional,
         remove_duplications=args.rm_dups,
         k=args.k,
         population_ratio_per_mask=args.population_ratio_per_mask,
-        use_gaussian=args.use_gaussian,
-        scoring_mirror=args.scoring_mirror,
-        batch_size_inference=args.batch_size,
         num_propose_mutation_per_variant=args.num_proposes_per_var,
         verbose=args.verbose,
         mutation_device=device,
+        log_dir=args.log_dir,
     )
 
     mutants, fitnesses = direct_evo(args.wt, args.wt_fitness, sequences, targets)

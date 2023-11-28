@@ -8,7 +8,7 @@ with open("README.md", "r") as f:
 with open("requirements.txt", "r") as f:
     install_requires = f.read().splitlines()
 
-version = "0.0.1"
+version = "1.0.0"
 
 with open(os.path.join("de", "version.py"), "w") as f:
     f.writelines([
@@ -21,7 +21,7 @@ with open(os.path.join("de", "version.py"), "w") as f:
 setup(
     name="de",
     version=version,
-    description="Machine Learning-guided Directed Evolution for Protein Design.",
+    description="Protein design by Directed Evolution guided by Large Language Models.",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/HySonLab/Directed_Evolution",
@@ -29,5 +29,5 @@ setup(
     install_requires=install_requires,
     python_requires=">=3.10",
     license="GNU",
-    keywords=["directed evolution", "protein engineering"]
+    keywords=["directed evolution", "protein engineering", "large language model"]
 )

@@ -1,7 +1,7 @@
 import sys
 import pandas as pd
 import os
-from de.predictors.tranception.utils.scoring_utils import get_mutated_sequence
+from de.common.utils import get_mutated_sequence
 
 
 def get_substrate(type):

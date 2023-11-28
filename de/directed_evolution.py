@@ -1,7 +1,6 @@
 import itertools
 import logging
 import numpy as np
-import pandas as pd
 import torch
 from copy import deepcopy
 from datetime import datetime
@@ -12,16 +11,6 @@ from de.common.utils import timer
 from de.samplers.maskers import BaseMasker
 import os
 
-log_dir = "/home/thanhtvt1/workspace/Directed_Evolution/exps/logs"
-i = 0
-
-while os.path.exists(f"{log_dir}/log_{i}.log"):
-    i += 1
-
-logging.basicConfig(filename=f"{log_dir}/log_{i}.log",
-                    level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
 
 class DiscreteDirectedEvolution2:
     def __init__(self,
@@ -31,17 +20,14 @@ class DiscreteDirectedEvolution2:
                  mutation_model: torch.nn.Module,
                  mutation_tokenizer: PreTrainedTokenizer,
                  fitness_predictor: Union[torch.nn.Module, object],
-                 conditional_task: bool = True,
                  remove_duplications: bool = False,
                  k: int = 3,
                  population_ratio_per_mask: List[float] = None,
-                 use_gaussian: bool = True,
-                 scoring_mirror: bool = False,
-                 batch_size_inference: int = 5,
                  num_propose_mutation_per_variant: int = 5,
                  verbose: bool = False,
                  num_workers: int = 16,
-                 mutation_device: Union[torch.device, str] = "cpu"):
+                 mutation_device: Union[torch.device, str] = "cpu",
+                 log_dir: str = "./logs/"):
         """Main class for Discrete-space Directed Evolution
 
         Args:
@@ -55,22 +41,12 @@ class DiscreteDirectedEvolution2:
         self.mutation_model = mutation_model
         self.mutation_tokenizer = mutation_tokenizer
         self.fitness_predictor = fitness_predictor
-        self.conditional_task = conditional_task
         self.rm_dups = remove_duplications
         self.k = k
-        self.use_gaussian = use_gaussian
-        self.scoring_mirror = scoring_mirror
-        self.batch_size_inference = batch_size_inference
         self.num_propose_mutation_per_variant = num_propose_mutation_per_variant
         self.num_workers = num_workers
         self.verbose = verbose
         self.mutation_device = mutation_device
-
-        # self.log_idx = [1, 50, 100, 150, 200, 250, 300]
-        self.log_idx = [1, 80, 160, 240, 320, 400, 480]
-        # self.log_idx = [1, 10, 20, 30, 40, 50, 60]
-        # self.log_idx = [1, 20, 40, 60, 80, 100, 120]
-
         self.population_ratio_per_mask = population_ratio_per_mask
         if population_ratio_per_mask is None:
             self.population_ratio_per_mask = [1 / len(maskers) for _ in range(len(maskers))]
@@ -85,6 +61,17 @@ class DiscreteDirectedEvolution2:
             raise ValueError("`n_steps` must be >= 1")
         if self.k < 1:
             raise ValueError("`k` must be >= 1")
+
+        # Create new log file
+        i = 0
+        while os.path.exists(f"{log_dir}/log_{i}.log"):
+            i += 1
+
+        logging.basicConfig(
+            filename=f"{log_dir}/log_{i:03d}.log",
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
 
     @timer
     def mask_sequences(
@@ -178,97 +165,6 @@ class DiscreteDirectedEvolution2:
 
         return mutated_seqs, mutants, state
 
-    def predict_fitness_unconditional(self,
-                                      wt_seq: str,
-                                      mutated_seqs: List[str],
-                                      mutants: List[str]) -> Union[List[str], List[float]]:
-        """Third step of Directed Evolution
-        Args:
-            wt_seq (str): wild-type sequence.
-            mutated_seqs (List[str]): Mutated sequences
-            mutants (List[str]): List of strings indicates the mutations in each sequence.
-
-        Returns:
-            new_variants (List[str]): List of mutated sequences sorted by fitness score.
-        """
-        mutation_df = pd.DataFrame({"mutated_sequence": mutated_seqs, "mutant": mutants})
-        log_fitness_df = self.fitness_predictor.score_mutants(mutation_df,
-                                                              wt_seq,
-                                                              self.scoring_mirror,
-                                                              self.batch_size_inference,
-                                                              self.num_workers)
-        log_fitness_df = log_fitness_df if self.prev_fitness is None \
-            else pd.concat([log_fitness_df, self.prev_fitness], ignore_index=True)
-        top_fitness = log_fitness_df.nlargest(n=self.population,
-                                              columns="avg_score",
-                                              keep="first")
-        self.prev_fitness = top_fitness
-
-        # make len(top_fitness) == self.population
-        if len(top_fitness) < self.population:
-            n = self.population - len(top_fitness) + 1
-            top_fitness = pd.concat([top_fitness.iloc[[0]]] * n + [top_fitness.iloc[1:]],
-                                    ignore_index=True)
-
-        # update self.mutation_logger according to saved mutant
-        self.mutation_logger = self.mutants2logger(top_fitness.mutant.tolist())
-        top_variants = top_fitness.mutated_sequence.tolist()
-        top_fitness_score = top_fitness.avg_score.tolist()
-        return top_variants, top_fitness_score
-
-    def predict_fitness_conditional(self,
-                                    inputs: Union[str, torch.Tensor],
-                                    wt_fitness: float,
-                                    mutated_seqs: List[str],
-                                    mutants: List[str]) -> Union[List[str], List[float]]:
-        """Third step of Directed Evolution
-        Args:
-            inputs (str | torch.Tensor): wild-type sequence or sequence representation shape of
-                (batch, sequence_len, dim).
-            wt_fitness (float): wild-type sequence's fitness.
-            mutated_seqs (List[str]): Mutated sequences
-            mutants (List[str]): List of strings indicates the mutations in each sequence.
-
-        Returns:
-            new_variants (List[str]): List of mutated sequences sorted by fitness score.
-        """
-        if self.use_gaussian:
-            assert isinstance(inputs, str)
-            raise NotImplementedError
-        else:
-            assert isinstance(inputs, torch.Tensor)
-            # (batch, 1)
-            fitness = self.fitness_predictor.infer_fitness(inputs).detach().cpu()
-            fitness = torch.concat([fitness, self.prev_fitness], dim=0)
-            mutants = mutants + self.prev_mutants
-            mutated_seqs = mutated_seqs + self.prev_variants
-
-            # Get topk fitness score
-            k = self.population if len(mutants) >= self.population else len(mutants)
-            topk_fitness, topk_indices = torch.topk(fitness, k, dim=0)
-            top_fitness_score = topk_fitness.squeeze(1).numpy().tolist()
-            top_indices = topk_indices.squeeze(1).numpy().tolist()
-
-            # Fill pool to fit pool size (if needed)
-            n = 0
-            if len(top_fitness_score) < self.population:
-                n = self.population - len(top_fitness_score)
-                top_fitness_score = [top_fitness_score[0] for _ in range(n)] + top_fitness_score
-                top_indices = [top_indices[0] for _ in range(n)] + top_indices
-
-            # Get top variants
-            retriever = itemgetter(*top_indices)
-            top_variants = list(retriever(mutated_seqs))
-            top_mutants = list(retriever(mutants))
-
-            # update self.mutation_logger according to saved mutant
-            self.mutation_logger = self.mutants2logger(top_mutants)
-            self.prev_fitness = topk_fitness
-            self.prev_mutants = top_mutants[n:]
-            self.prev_variants = top_variants[n:]
-
-        return top_variants, top_fitness_score
-
     @timer
     def predict_fitness(self,
                         inputs: Union[str, torch.Tensor],
@@ -283,33 +179,46 @@ class DiscreteDirectedEvolution2:
             mutants (List[str]): List of strings indicates the mutations in each sequence.
 
         Returns:
-            new_variants (List[str]): List of mutated sequences sorted by fitness score.
+            top_variants (List[str]): List of mutated sequences sorted by fitness score.
+            top_fitness_score (List[float]): List of fitness score sorted in descending order.
         """
         if self.verbose:
             now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             print(f"\n{now}: ====== FITNESS PREDICTION ======")
 
-        if self.conditional_task:
-            inputs = inputs.to(self.mutation_device)
-            top_variants, top_fitness = self.predict_fitness_conditional(
-                inputs, wt_fitness, mutated_seqs, mutants
-            )
-        else:
-            top_variants, top_fitness = self.predict_fitness_unconditional(
-                inputs, mutated_seqs, mutants
-            )
-        return top_variants, top_fitness
+        inputs = inputs.to(self.mutation_device)
 
-    def rank_descriptor(self, insta_idx: np.ndarray, boman_idx: np.ndarray):
-        """Rank samples based on descriptors.
-        `insta_idx` is better when lower
-        `boman_idx` is better when higher
-        """
-        sorted_ids_insta = np.argsort(insta_idx)
-        sorted_ids_boman = np.argsort(boman_idx)[::-1]
-        rank_point = np.argsort(sorted_ids_insta) + np.argsort(sorted_ids_boman)
-        final_rank = np.argsort(rank_point)
-        return final_rank.tolist()
+        # (batch, 1)
+        fitness = self.fitness_predictor.infer_fitness(inputs).detach().cpu()
+        fitness = torch.concat([fitness, self.prev_fitness], dim=0)
+        mutants = mutants + self.prev_mutants
+        mutated_seqs = mutated_seqs + self.prev_variants
+
+        # Get topk fitness score
+        k = self.population if len(mutants) >= self.population else len(mutants)
+        topk_fitness, topk_indices = torch.topk(fitness, k, dim=0)
+        top_fitness_score = topk_fitness.squeeze(1).numpy().tolist()
+        top_indices = topk_indices.squeeze(1).numpy().tolist()
+
+        # Fill pool to fit pool size (if needed)
+        n = 0
+        if len(top_fitness_score) < self.population:
+            n = self.population - len(top_fitness_score)
+            top_fitness_score = [top_fitness_score[0] for _ in range(n)] + top_fitness_score
+            top_indices = [top_indices[0] for _ in range(n)] + top_indices
+
+        # Get top variants
+        retriever = itemgetter(*top_indices)
+        top_variants = list(retriever(mutated_seqs))
+        top_mutants = list(retriever(mutants))
+
+        # update self.mutation_logger according to saved mutant
+        self.mutation_logger = self.mutants2logger(top_mutants)
+        self.prev_fitness = topk_fitness
+        self.prev_mutants = top_mutants[n:]
+        self.prev_variants = top_variants[n:]
+
+        return top_variants, top_fitness_score
 
     def __call__(self,
                  wt_seq: str,
@@ -325,8 +234,6 @@ class DiscreteDirectedEvolution2:
             variants (List[str]): list of protein sequences
             scores (torch.Tensor): scores for the variants
         """
-        afs = []
-        mfs = []
         if self.verbose:
             now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             print(f"{now}: Wild-type sequence: {wt_seq}")
@@ -387,36 +294,14 @@ class DiscreteDirectedEvolution2:
             # ================================ #
             # ====== FITNESS PREDICTION ====== #
             # ================================ #
-            inputs = enc_out if self.conditional_task and not self.use_gaussian else wt_seq
+            inputs = enc_out
             variants, score = self.predict_fitness(inputs, wt_fitness, mutated_seqs, mutants)
 
             logging.info(f"\n-------- STEP {step} --------")
             for i, (var, mut, s) in enumerate(zip(variants, self.prev_mutants, score)):
                 logging.info(f"{i}:\t{s}\t{mut}\t{var}")
 
-            if (step + 1) in self.log_idx:
-                tmp_score = score
-                if score[-1] == -100:
-                    print("Skip!!")
-                    tmp_score = score[:-1]
-                mfs.append(max(tmp_score))
-                afs.append(np.mean(tmp_score))
-
-        print("mfs:", mfs)
-        print("afs:", afs)
-        logging.info("\n----------")
-        logging.info(f"k = {self.k}")
-        logging.info(f"MFS: {mfs}")
-        logging.info(f"AFS: {afs}")
         return (self.prev_mutants, self.prev_fitness)
-
-        # Return best variant
-        best_score = score[0]
-        mutant = ''
-        for k, v in self.mutation_logger[0].items():
-            mutant += v[0] + k + v[1] + ":"
-
-        return (mutant[:-1], best_score)
 
     def remove_dups(self, enc_out, mutated_seqs, mutants):
         candidate_array = np.array(mutated_seqs)

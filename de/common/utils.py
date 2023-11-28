@@ -7,6 +7,40 @@ from datetime import datetime
 from functools import wraps
 from polyleven import levenshtein
 from typing import List
+from .constants import CANONICAL_ALPHABET
+
+
+def get_mutated_sequence(focus_seq: str,
+                         mutant: str,
+                         start_idx: int = 1,
+                         AA_vocab: str = ''.join(CANONICAL_ALPHABET)) -> str:
+    """Mutates an input sequence (focus_seq) via an input mutation triplet (substitutions only).
+
+    Args:
+        focus_seq (str): Input sequence.
+        mutant (str): list of mutants applied to input sequence (e.g., "B12F:A83M").
+        start_idx (int): Index to start indexing.
+        AA_vocab (str): Amino acids.
+
+    Returns:
+        (str): mutated sequence.
+    """
+    if mutant == "":
+        return focus_seq
+    mutated_seq = list(focus_seq)
+    for mutation in mutant.split(":"):
+        try:
+            from_AA, position, to_AA = mutation[0], int(
+                mutation[1:-1]), mutation[-1]
+        except ValueError:
+            print("Issue with mutant: " + str(mutation))
+        relative_position = position - start_idx
+        assert from_AA == focus_seq[relative_position], \
+            f"Invalid from_AA or mutant position: {str(mutation)} from_AA {str(str(from_AA))} " \
+            f"relative pos: {str(relative_position)} focus_seq: {str(focus_seq)}"
+        assert to_AA in AA_vocab, f"Mutant to_AA is invalid: {str(mutation)}"
+        mutated_seq[relative_position] = to_AA
+    return "".join(mutated_seq)
 
 
 def split_kmers2(seqs: List[str], k: int = 3) -> List[List[str]]:

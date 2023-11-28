@@ -3,6 +3,7 @@ __pycache__/
 .idea/
 uniref*/
 *.fasta
-exps/
 wandb/
 *.pdf
+*.log
+results/results_

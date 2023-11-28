@@ -13,11 +13,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train decoder.")
     parser.add_argument("--data_file",
                         type=str,
-                        default="/home/thanhtvt1/workspace/Directed_Evolution/data/proteins/avGFP/avGFP.csv",
                         help="Path to data directory.")
     parser.add_argument("--dataset_name",
                         type=str,
-                        default="avGFP",
                         help="Name of trained dataset.")
     parser.add_argument("--pretrained_encoder",
                         type=str,
@@ -25,7 +23,7 @@ def parse_args():
                         help="Path to pretrained encoder.")
     parser.add_argument("--dec_hidden_dim",
                         type=int,
-                        default=1024,
+                        default=1280,
                         help="Hidden dim of decoder.")
     parser.add_argument("--batch_size",
                         type=int,
