@@ -25,13 +25,14 @@ class MaskedConv1d(nn.Conv1d):
                  groups: int = 1,
                  bias: bool = True):
         """
-        :param in_channels: input channels
-        :param out_channels: output channels
-        :param kernel_size: the kernel width
-        :param stride: filter shift
-        :param dilation: dilation factor
-        :param groups: perform depth-wise convolutions
-        :param bias: adds learnable bias to output
+        Args:
+            in_channels (int): input channels
+            out_channels (int): output channels
+            kernel_size (int): the kernel width
+            stride (int): filter shift
+            dilation (int): dilation factor
+            groups (int): perform depth-wise convolutions
+            bias (bool): adds learnable bias to output
         """
         padding = dilation * (kernel_size - 1) // 2
         super().__init__(in_channels,
@@ -51,7 +52,7 @@ class MaskedConv1d(nn.Conv1d):
 
 class Attention1d(nn.Module):
 
-    def __init__(self, in_dim):
+    def __init__(self, in_dim: int):
         super().__init__()
         self.layer = MaskedConv1d(in_dim, 1, 1)
 
@@ -69,7 +70,7 @@ class Attention1d(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, input_dim: int = 1280, hidden_dim: int = 512):
+    def __init__(self, input_dim: int, hidden_dim: int):
         super().__init__()
         self.dense_1 = nn.Linear(input_dim, hidden_dim)
         self.dense_2 = nn.Linear(hidden_dim, hidden_dim)
