@@ -1,4 +1,5 @@
 import itertools
+import logging
 import numpy as np
 import pandas as pd
 import torch
@@ -9,6 +10,17 @@ from typing import List, Tuple, Union
 from transformers import PreTrainedTokenizer
 from de.common.utils import timer
 from de.samplers.maskers import BaseMasker
+import os
+
+log_dir = "/home/thanhtvt1/workspace/Directed_Evolution/exps/logs"
+i = 0
+
+while os.path.exists(f"{log_dir}/log_{i}.log"):
+    i += 1
+
+logging.basicConfig(filename=f"{log_dir}/log_{i}.log",
+                    level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 class DiscreteDirectedEvolution2:
@@ -55,7 +67,8 @@ class DiscreteDirectedEvolution2:
         self.mutation_device = mutation_device
 
         # self.log_idx = [1, 50, 100, 150, 200, 250, 300]
-        self.log_idx = [1, 10, 20, 30, 40, 50, 60]
+        self.log_idx = [1, 80, 160, 240, 320, 400, 480]
+        # self.log_idx = [1, 10, 20, 30, 40, 50, 60]
         # self.log_idx = [1, 20, 40, 60, 80, 100, 120]
 
         self.population_ratio_per_mask = population_ratio_per_mask
@@ -225,7 +238,7 @@ class DiscreteDirectedEvolution2:
         else:
             assert isinstance(inputs, torch.Tensor)
             # (batch, 1)
-            fitness = self.fitness_predictor.infer_fitness(inputs).detach()
+            fitness = self.fitness_predictor.infer_fitness(inputs).detach().cpu()
             fitness = torch.concat([fitness, self.prev_fitness], dim=0)
             mutants = mutants + self.prev_mutants
             mutated_seqs = mutated_seqs + self.prev_variants
@@ -277,6 +290,7 @@ class DiscreteDirectedEvolution2:
             print(f"\n{now}: ====== FITNESS PREDICTION ======")
 
         if self.conditional_task:
+            inputs = inputs.to(self.mutation_device)
             top_variants, top_fitness = self.predict_fitness_conditional(
                 inputs, wt_fitness, mutated_seqs, mutants
             )
@@ -376,6 +390,10 @@ class DiscreteDirectedEvolution2:
             inputs = enc_out if self.conditional_task and not self.use_gaussian else wt_seq
             variants, score = self.predict_fitness(inputs, wt_fitness, mutated_seqs, mutants)
 
+            logging.info(f"\n-------- STEP {step} --------")
+            for i, (var, mut, s) in enumerate(zip(variants, self.prev_mutants, score)):
+                logging.info(f"{i}:\t{s}\t{mut}\t{var}")
+
             if (step + 1) in self.log_idx:
                 tmp_score = score
                 if score[-1] == -100:
@@ -386,6 +404,10 @@ class DiscreteDirectedEvolution2:
 
         print("mfs:", mfs)
         print("afs:", afs)
+        logging.info("\n----------")
+        logging.info(f"k = {self.k}")
+        logging.info(f"MFS: {mfs}")
+        logging.info(f"AFS: {afs}")
         return (self.prev_mutants, self.prev_fitness)
 
         # Return best variant

@@ -199,15 +199,10 @@ def save_results(wt_seqs: List[str], mutants, score, output_path: str):
 
 
 def main(args):
-    # Set up multiprocessing
-    # mp.set_start_method("spawn", force=True)
-    # os.environ["OMP_NUM_THREADS"] = "1"
-
     # Init env stuffs
     set_seed(args.seed) if args.set_seed_only else enable_full_deterministic(args.seed)
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = 'true'
-    cpu_device = torch.device("cpu")
-    mutation_device = torch.device("cpu" if args.devices == "-1" else f"cuda:{args.devices}")
+    device = torch.device("cpu" if args.devices == "-1" else f"cuda:{args.devices}")
 
     # Get sequences
     sequences, targets = None, None
@@ -215,8 +210,8 @@ def main(args):
         sequences, targets = extract_from_csv(args.data_file, args.population)
 
     # Init models
-    mutation_model, mutation_tokenizer = initialize_mutation_model(args, mutation_device)
-    fitness_predictor = intialize_fitness_predictor(args, cpu_device)
+    mutation_model, mutation_tokenizer = initialize_mutation_model(args, device)
+    fitness_predictor = intialize_fitness_predictor(args, device)
     # Init masker
     maskers = initialize_maskers(args)
 
@@ -237,7 +232,7 @@ def main(args):
         batch_size_inference=args.batch_size,
         num_propose_mutation_per_variant=args.num_proposes_per_var,
         verbose=args.verbose,
-        mutation_device=mutation_device,
+        mutation_device=device,
     )
 
     mutants, fitnesses = direct_evo(args.wt, args.wt_fitness, sequences, targets)
@@ -245,50 +240,6 @@ def main(args):
     filename = args.save_name or "results_" + os.path.basename(args.data_file[0])
     filepath = os.path.join(args.result_dir, filename)
     save_results([args.wt] * len(mutants), mutants, fitnesses, filepath)
-
-    # final_evos = []
-    # start_idx = 0
-    # for i, seq in enumerate(sequences[:1]):
-    #     evo = direct_evo(seq)
-    #     final_evos.append(evo)
-    #     if args.save_interval > 0 and i != 0 and i % args.save_interval == 0:
-    #         filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
-    #         filepath = os.path.join(args.result_dir, f"batch_{str(i)}_{filename}")
-    #         save_results(sequences[start_idx:i + 1], final_evos, filepath)
-    #         start_idx = i
-    #         final_evos = []
-
-    # sequences = sequences[args.start_index:]
-
-    # final_evos = []
-    # full_length = len(sequences)
-    # pool = mp.Pool(processes=args.num_processes)
-    # if args.save_interval > 0:
-    #     sequences = [sequences[i * args.save_interval:(i + 1) * args.save_interval]
-    #                  for i in range((len(sequences) + args.save_interval - 1) // args.save_interval)]
-    # if isinstance(sequences[0], list):
-    #     for i, seqs in enumerate(sequences):
-    #         evos = pool.map(direct_evo, seqs)
-    #         filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
-    #         filepath = os.path.join(
-    #             args.result_dir,
-    #             f"batch_{args.start_index + i * args.save_interval}-"
-    #             f"{args.start_index + (i + 1) * args.save_interval - 1}_{filename}"
-    #             if (i + 1) * args.save_interval < full_length
-    #             else f"batch_{i * args.save_interval}-{full_length - 1}_{filename}"
-    #         )
-    #         save_results(seqs, evos, filepath)
-    #         final_evos.extend(evos)
-    #         evos = []
-    # else:
-    #     final_evos = pool.map(direct_evo, sequences)
-
-    # pool.close()
-    # pool.join()
-
-    # filename = args.save_name or "results_" + os.path.basename(args.csv_file[0])
-    # filepath = os.path.join(args.result_dir, filename)
-    # save_results(tmp_seqs, final_evos, filepath)
 
 
 if __name__ == "__main__":

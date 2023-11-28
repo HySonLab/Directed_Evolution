@@ -43,9 +43,9 @@ def generate_data(wt_seq, data_file):
 if __name__ == "__main__":
     # Files
     data_dir = sys.argv[1]
-    seq_file = os.path.join(data_dir, "U4B_reference_sequence.txt")
+    seq_file = os.path.join(data_dir, "E4B_reference_sequence.txt")
     data_file = os.path.join(data_dir, "1303309110_sd01.tsv")
-    out_file = os.path.join(data_dir, "U4B.csv")
+    out_file = os.path.join(data_dir, "E4B.csv")
 
     # Get protein sequence
     wt_seq = get_aa_sequence(seq_file)
