@@ -186,7 +186,18 @@ options:
 ## Citation
 If our paper aids your work, please kindly cite our paper using the following bibtex
 ```bibtex
-Update...
+@article {Tran2023.11.28.568945,
+	author = {Trong Thanh Tran and Truong Son Hy},
+	title = {Protein Design by Directed Evolution Guided by Large Language Models},
+	elocation-id = {2023.11.28.568945},
+	year = {2023},
+	doi = {10.1101/2023.11.28.568945},
+	publisher = {Cold Spring Harbor Laboratory},
+	abstract = {Directed evolution, a strategy for protein engineering, optimizes protein properties (i.e., fitness) by a rigorous and resource-intensive process of screening or selecting among a vast range of mutations. By conducting an in-silico screening of sequence properties, machine learning-guided directed evolution (MLDE) can expedite the optimization process and alleviate the experimental workload. In this work, we propose a general MLDE framework in which we apply recent advancements of Deep Learning in protein representation learning and protein property prediction to accelerate the searching and optimization processes. In particular, we introduce an optimization pipeline that utilizes Large Language Models (LLMs) to pinpoint the mutation hotspots in the sequence and then suggest replacements to improve the overall fitness. Our experiments have shown the superior efficiency and efficacy of our proposed framework in the conditional protein generation, in comparision with traditional searching algorithms, diffusion models, and other generative models. We expect this work will shed a new light on not only protein engineering but also on solving combinatorial problems using data-driven methods. Our implementation is publicly available at https://github.com/HySonLab/Directed_EvolutionCompeting Interest StatementThe authors have declared no competing interest.},
+	URL = {https://www.biorxiv.org/content/early/2023/11/29/2023.11.28.568945},
+	eprint = {https://www.biorxiv.org/content/early/2023/11/29/2023.11.28.568945.full.pdf},
+	journal = {bioRxiv}
+}
 ```
 
 ## License
