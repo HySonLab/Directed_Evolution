@@ -13,15 +13,15 @@ Contributors:
 - [Structure Description](#structure-description)
 - [Installation](#installation)
 - [Usage](#usage)
-    - [Training](#train)
+    - [Training](#training)
     - [Inference](#inference)
 - [Citation](#citation)
 - [License](#license)
 
 ## Introduction
-This is the official repository for paper [Protein Design by Directed Evolution guided by Large Language Models]().
+This is the official implementation of the paper [Protein Design by Directed Evolution guided by Large Language Models](https://www.biorxiv.org/content/10.1101/2023.11.28.568945v1).
 
-| ![space-1.jpg](./assets/Directed_Evolution_Framework.png) | 
+| ![framework](./assets/Directed_Evolution_Framework.png) | 
 |:--:| 
 | *Our pipeline **(C)**, in comparision to traditional pipeline **(A)** and common ML-guided pipeline **(B)*** |
 
@@ -50,7 +50,7 @@ Our repository is structured as follows:
 
 ## Installation
 
-You should have Python 3.10 or higher. I highly recommend creating a virtual environment like venv or conda. If so, run the below commands to install:
+You should have Python 3.10 or higher. I highly recommend creating a virtual environment like conda. If so, run the below commands to install:
 
 ```shell
 git clone https://github.com/HySonLab/Directed_Evolution.git 
@@ -64,7 +64,7 @@ pip install -e .
 
 ## Usage
 
-### Train decoder
+### Training
 
 To train the oracle (i.e., Attention1D) on certain dataset (e.g., AAV), simply run:
 ```shell
