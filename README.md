@@ -15,6 +15,7 @@ Contributors:
 - [Usage](#usage)
     - [Training](#training)
     - [Inference](#inference)
+    - [Provided Checkpoints](#provided-checkpoints)
 - [Citation](#citation)
 - [License](#license)
 
@@ -182,6 +183,10 @@ options:
                         Filename of the result csv file.
   --devices DEVICES     Devices, separated by commas.
 ```
+
+### Provided Checkpoints
+
+To reproduce the results outlined in our paper, you can execute the provided code using the checkpoints available for download from the following [link](https://drive.google.com/drive/folders/1i-WaAqzZgJ2EyNn5YJkNqOeM-Guz5kw5?usp=drive_link). It's important to note that slight variations in scores may occur compared to our reported scores due to potential errors during the process.
 
 ## Citation
 If our paper aids your work, please kindly cite our paper using the following bibtex
