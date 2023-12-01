@@ -7,6 +7,10 @@ Contributors:
 * Tran Van Trong Thanh
 * Truong Son Hy (PI / Correspondent)
 
+Paper:
+
+https://doi.org/10.1101/2023.11.28.568945
+
 ## Table of Contents:
 
 - [Introduction](#introduction)
