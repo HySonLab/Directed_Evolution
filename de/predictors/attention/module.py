@@ -4,7 +4,7 @@ from lightning import LightningModule
 from torchmetrics import MinMetric, MeanMetric
 from torchmetrics.regression.mse import MeanSquaredError
 from torchmetrics.regression.mae import MeanAbsoluteError
-from typing import Any
+from typing import Any, List
 from .decoder import Decoder
 from transformers import EsmModel, AutoTokenizer
 
@@ -31,7 +31,7 @@ class ESM2_Attention(nn.Module):
 
 class ESM2DecoderModule(LightningModule):
     def __init__(self,
-                 net: torch.nn.Module,
+                 net: nn.Module,
                  optimizer: torch.optim.Optimizer):
         super().__init__()
 
@@ -106,6 +106,13 @@ class ESM2DecoderModule(LightningModule):
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
         return {"optimizer": optimizer}
 
-    def infer_fitness(self, representation: torch.Tensor):
+    def predict_fitness(self, representation: torch.Tensor):
         fitness = self.net.decoder(representation)
         return fitness
+
+    def infer_fitness(self, seqs: List[str]):
+        with torch.inference_mode():
+            inputs = self.net.tokenizer(seqs, return_tensors="pt").to(self.device)
+            repr = self.net.esm(**inputs).last_hidden_state
+            outputs = self.predict_fitness(repr)
+            return outputs.cpu()

@@ -5,9 +5,57 @@ import torch
 import random
 from datetime import datetime
 from functools import wraps
+from itertools import combinations
 from polyleven import levenshtein
 from typing import List
 from .constants import CANONICAL_ALPHABET
+
+
+def edit_distance(seq1, seq2):
+    return levenshtein(seq1, seq2)
+
+
+def measure_diversity(seqs: List[str]):
+    dists = []
+    for pair in combinations(seqs, 2):
+        dists.append(edit_distance(*pair))
+    return np.mean(dists)
+
+
+def measure_distwt(seqs: List[str], wt: str):
+    dists = []
+    for seq in seqs:
+        dists.append(edit_distance(seq, wt))
+    return np.mean(dists)
+
+
+def measure_novelty(seqs: List[str], train_seqs: List[str]):
+    all_novelty = []
+    for seq in seqs:
+        min_dist = 1e9
+        for known in train_seqs:
+            dist = edit_distance(seq, known)
+            if dist == 0:
+                all_novelty.append(dist)
+                break
+            elif dist < min_dist:
+                min_dist = dist
+        all_novelty.append(min_dist)
+    return np.mean(all_novelty)
+
+
+def remove_duplicates(seqs: List[str], scores: List[float], return_idx: bool = False):
+    new_seqs = []
+    new_scores = []
+    ids = []
+    for idx, (seq, score) in enumerate(zip(seqs, scores)):
+        if seq in new_seqs:
+            continue
+        else:
+            new_seqs.append(seq)
+            new_scores.append(score)
+            ids.append(idx)
+    return new_seqs, new_scores, ids if return_idx else None
 
 
 def get_mutated_sequence(focus_seq: str,
@@ -43,12 +91,18 @@ def get_mutated_sequence(focus_seq: str,
     return "".join(mutated_seq)
 
 
+def get_mutants(wt_seq: str, variant: str, offset_idx: int = 1):
+    assert len(wt_seq) == len(variant), "Length must be the same."
+    mutant = []
+    for i in range(len(wt_seq)):
+        if wt_seq[i] != variant[i]:
+            mutant.append(f"{wt_seq[i]}{i + offset_idx}{variant[i]}")
+
+    return ":".join(mutant)
+
+
 def split_kmers2(seqs: List[str], k: int = 3) -> List[List[str]]:
     return [[seq[i:i + k] for i in range(len(seq) - k + 1)] for seq in seqs]
-
-
-def edit_distance(seq1: str, seq2: str) -> int:
-    return levenshtein(seq1, seq2)
 
 
 def set_seed(seed: int):

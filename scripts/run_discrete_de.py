@@ -9,20 +9,15 @@ from de.directed_evolution import DiscreteDirectedEvolution2
 from de.samplers.maskers import RandomMasker2, ImportanceMasker2
 from de.samplers.models.esm import ESM2
 from de.predictors.attention.module import ESM2DecoderModule, ESM2_Attention
+from de.predictors.oracle import ESM1b_Landscape, ESM1v
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_file",
+    parser.add_argument("--task",
                         type=str,
-                        help="Path to data file.")
-    parser.add_argument("--wt",
-                        type=str,
-                        help="Amino acid sequence.")
-    parser.add_argument("--wt_fitness",
-                        type=float,
-                        default=-100,
-                        help="Wild-type sequence's fitness.")
+                        choices=["AAV", "avGFP", "TEM", "E4B", "UBE2I", "LGK", "Pab1", "AMIE"],
+                        help="Benchmark task.")
     parser.add_argument("--n_steps",
                         type=int,
                         default=100,
@@ -52,7 +47,7 @@ def parse_args():
                         help="Pretrained model name or path for mutation checkpoint.")
     parser.add_argument("--dec_hidden_size",
                         type=int,
-                        default=1280,
+                        default=512,
                         help="Decoder hidden size (for conditional task).")
     parser.add_argument("--predictor_ckpt_path",
                         type=str,
@@ -76,11 +71,11 @@ def parse_args():
                         help="Whether to enable full determinism or set random seed only.")
     parser.add_argument("--result_dir",
                         type=str,
-                        default=os.path.abspath("../exps/results"),
+                        default=os.path.abspath("./exps/results"),
                         help="Directory to save result csv file.")
     parser.add_argument("--log_dir",
                         type=str,
-                        default=os.path.abspath("../exps/logs"),
+                        default=os.path.abspath("./exps/logs"),
                         help="Directory to save logfile")
     parser.add_argument("--save_name",
                         type=str,
@@ -89,6 +84,10 @@ def parse_args():
                         type=str,
                         default="-1",
                         help="Devices, separated by commas.")
+    parser.add_argument("--esm1v_seed",
+                        type=int,
+                        choices=[1, 2, 3, 4, 5])
+    parser.add_argument("--predictor_ckpt_path", type=str)
     args = parser.parse_args()
     return args
 
@@ -119,8 +118,20 @@ def initialize_maskers(args):
     return [rand_masker, imp_masker]
 
 
-def intialize_fitness_predictor(args, device: Union[str, torch.device]):
-    decoder = ESM2_Attention(args.pretrained_mutation_name, hidden_dim=args.dec_hidden_size)
+def initialize_oracle(args, device: Union[str, torch.device]):
+    landscape = ESM1b_Landscape(args.task, device)
+    return landscape
+
+
+def initialize_oracle2(args, device):
+    model = ESM1v(f"esm1v_t33_650M_UR90S_{args.esm1v_seed}", device, "masked", 1)
+    return model
+
+
+def initialize_fitness_predictor(args, device: Union[str, torch.device]):
+    tmp_name = "facebook/esm2_t33_650M_UR50D"
+    # decoder = ESM2_Attention(args.pretrained_mutation_name, hidden_dim=args.dec_hidden_size)
+    decoder = ESM2_Attention(tmp_name, hidden_dim=args.dec_hidden_size)
     model = ESM2DecoderModule.load_from_checkpoint(
         args.predictor_ckpt_path, map_location=device, net=decoder
     )
@@ -129,10 +140,14 @@ def intialize_fitness_predictor(args, device: Union[str, torch.device]):
     return model
 
 
-def save_results(wt_seqs: List[str], mutants, score, output_path: str):
+def save_results(wt_seqs: List[str], mutants, score, valid_score, output_path: str):
     output_dir = os.path.dirname(output_path)
     os.makedirs(output_dir, exist_ok=True)
-    df = pd.DataFrame.from_dict({"WT": wt_seqs, "mutants": mutants, "score": score})
+    df = pd.DataFrame.from_dict({"WT": wt_seqs,
+                                 "mutants": mutants,
+                                 "score": score,
+                                 "orc. score": valid_score})
+    df.sort_values(by=["orc. score"], ascending=False, inplace=True, ignore_index=True)
     df.to_csv(output_path, index=False)
 
 
@@ -142,16 +157,19 @@ def main(args):
     os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = 'true'
     device = torch.device("cpu" if args.devices == "-1" else f"cuda:{args.devices}")
 
-    # Get sequences
-    sequences, targets = None, None
-    if args.data_file is not None:
-        sequences, targets = extract_from_csv(args.data_file, args.population)
-
     # Init models
     mutation_model, mutation_tokenizer = initialize_mutation_model(args, device)
-    fitness_predictor = intialize_fitness_predictor(args, device)
+    fitness_predictor = initialize_fitness_predictor(args, device)
+    # Init oracle
+    oracle = initialize_oracle(args, device)
+    # oracle2 = initialize_oracle2(args, device)
     # Init masker
     maskers = initialize_maskers(args)
+    # Create folder
+    result_dir = os.path.join(args.result_dir, args.task)
+    log_dir = os.path.join(args.log_dir, args.task)
+    os.makedirs(result_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
 
     # Init procedure
     direct_evo = DiscreteDirectedEvolution2(
@@ -167,14 +185,19 @@ def main(args):
         num_propose_mutation_per_variant=args.num_proposes_per_var,
         verbose=args.verbose,
         mutation_device=device,
-        log_dir=args.log_dir,
+        log_dir=log_dir,
+        seed=args.seed,
     )
 
-    mutants, fitnesses = direct_evo(args.wt, args.wt_fitness, sequences, targets)
-    fitnesses = fitnesses.squeeze(1).numpy().tolist()
-    filename = args.save_name or "results_" + os.path.basename(args.data_file[0])
-    filepath = os.path.join(args.result_dir, filename)
-    save_results([args.wt] * len(mutants), mutants, fitnesses, filepath)
+    lines = open(f"./preprocessed_data/{args.task}/{args.task}_reference_sequence.txt").readlines()
+    wt_seq, wt_fitness = lines[0].strip(), float(lines[1].strip())
+    mutants, pred_fitness, variants = direct_evo(wt_seq, wt_fitness)
+    pred_fitness = pred_fitness.squeeze(1).numpy().tolist()
+
+    valid_fitness = oracle.infer_fitness(variants)
+
+    filepath = os.path.join(result_dir, args.save_name)
+    save_results([wt_seq] * len(mutants), mutants, pred_fitness, valid_fitness, filepath)
 
 
 if __name__ == "__main__":

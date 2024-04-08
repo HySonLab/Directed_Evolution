@@ -38,7 +38,7 @@ def parse_args():
                         help="Training devices separated by comma.")
     parser.add_argument("--output_dir",
                         type=str,
-                        default="../exps",
+                        default="./exps",
                         help="Path to output directory.")
     parser.add_argument("--grad_accum_steps",
                         type=int,
@@ -126,12 +126,14 @@ def train(args):
         loggers.WandbLogger(save_dir=args.output_dir,
                             project=args.wandb_project)
     ]
+    prefix = args.pretrained_encoder.split("/")[-1] + f"-dec_{args.dec_hidden_dim}"
     callback_list = [
         callbacks.RichModelSummary(),
         callbacks.RichProgressBar(),
         callbacks.ModelCheckpoint(
             dirpath=os.path.join(args.output_dir, "checkpoints"),
-            filename=f"esm_dec-{args.dataset_name}_" + "{epoch:02d}-{val_loss:.3f}",
+            filename=f"{prefix}-{args.dataset_name}_" +
+                     "{epoch:02d}-{train_loss:.3f}-{val_loss:.3f}",
             monitor="val_loss",
             verbose=True,
             save_top_k=args.num_ckpts,

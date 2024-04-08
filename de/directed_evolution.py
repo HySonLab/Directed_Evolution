@@ -9,7 +9,6 @@ from typing import List, Tuple, Union
 from transformers import PreTrainedTokenizer
 from de.common.utils import timer
 from de.samplers.maskers import BaseMasker
-import os
 
 
 class DiscreteDirectedEvolution2:
@@ -27,7 +26,8 @@ class DiscreteDirectedEvolution2:
                  verbose: bool = False,
                  num_workers: int = 16,
                  mutation_device: Union[torch.device, str] = "cpu",
-                 log_dir: str = "./logs/"):
+                 log_dir: str = "./logs/",
+                 seed: int = 0,):
         """Main class for Discrete-space Directed Evolution
 
         Args:
@@ -47,6 +47,7 @@ class DiscreteDirectedEvolution2:
         self.num_workers = num_workers
         self.verbose = verbose
         self.mutation_device = mutation_device
+        self.seed = seed
         self.population_ratio_per_mask = population_ratio_per_mask
         if population_ratio_per_mask is None:
             self.population_ratio_per_mask = [1 / len(maskers) for _ in range(len(maskers))]
@@ -62,15 +63,12 @@ class DiscreteDirectedEvolution2:
         if self.k < 1:
             raise ValueError("`k` must be >= 1")
 
-        # Create new log file
-        i = 0
-        while os.path.exists(f"{log_dir}/log_{i}.log"):
-            i += 1
-
+        filename = f"{log_dir}/log_mask={'-'.join([str(msk) for msk in self.population_ratio_per_mask])}_k={k}_beam={num_propose_mutation_per_variant}_{self.seed}.log"
         logging.basicConfig(
-            filename=f"{log_dir}/log_{i:03d}.log",
+            filename=filename,
             level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            filemode='w'
         )
 
     @timer
@@ -120,8 +118,8 @@ class DiscreteDirectedEvolution2:
         """Second step of Directed Evolution
         Args:
             wt_seq (str): wild-type sequence.
-            masked_variants (List[str]): Masked sequences (each has been splitted into k-mers)
-            masked_poses (List[List[int]]): Masked positions.
+            masked_variants (List[str]): Masked sequences (each has been splitted into k-mers).
+            masked_positions (List[List[int]]): Masked positions.
 
         Returns:
             mutated_seqs (List[str]): Mutated sequences
@@ -136,7 +134,7 @@ class DiscreteDirectedEvolution2:
         masked_inputs = self.mutation_model.tokenize(masked_variants)
         # move to device
         masked_inputs.to(self.mutation_device)
-        with torch.no_grad():
+        with torch.inference_mode():
             masked_outputs = self.mutation_model(masked_inputs)
             logits = masked_outputs.logits
             state = masked_outputs.hidden_states[-1]
@@ -170,7 +168,8 @@ class DiscreteDirectedEvolution2:
                         inputs: Union[str, torch.Tensor],
                         wt_fitness: float,
                         mutated_seqs: List[str],
-                        mutants: List[str]) -> Union[List[str], List[float]]:
+                        mutants: List[str],
+                        wt_seq: str = None) -> Union[List[str], List[float]]:
         """Third step of Directed Evolution
         Args:
             inputs (str | torch.Tensor): wild-type sequence or sequence representation shape of
@@ -189,7 +188,11 @@ class DiscreteDirectedEvolution2:
         inputs = inputs.to(self.mutation_device)
 
         # (batch, 1)
-        fitness = self.fitness_predictor.infer_fitness(inputs).detach().cpu()
+        # fitness = self.fitness_predictor.infer_fitness(inputs).detach().cpu()
+        # fitness = torch.concat([fitness, self.prev_fitness], dim=0)
+        fitness = torch.tensor(self.fitness_predictor.infer_fitness(mutated_seqs),
+                               dtype=torch.float32)
+        fitness = fitness.unsqueeze(1) if fitness.ndim == 1 else fitness
         fitness = torch.concat([fitness, self.prev_fitness], dim=0)
         mutants = mutants + self.prev_mutants
         mutated_seqs = mutated_seqs + self.prev_variants
@@ -220,11 +223,7 @@ class DiscreteDirectedEvolution2:
 
         return top_variants, top_fitness_score
 
-    def __call__(self,
-                 wt_seq: str,
-                 wt_fitness: float,
-                 seqs: List[str] = None,
-                 seqs_fitness: List[float] = None):
+    def __call__(self, wt_seq: str, wt_fitness: float):
         """Run the discrete-space directed evolution
 
         Args:
@@ -239,19 +238,11 @@ class DiscreteDirectedEvolution2:
             print(f"{now}: Wild-type sequence: {wt_seq}")
 
         # Initialize
-        if seqs is None:
-            variants = [wt_seq for _ in range(self.population)]
-            self.mutation_logger = [{} for _ in range(self.population)]
-            self.prev_fitness = torch.tensor([[wt_fitness]], dtype=torch.float32)
-            self.prev_mutants = [""]
-            self.prev_variants = [wt_seq]
-        else:
-            assert seqs_fitness is not None
-            variants = seqs
-            self.mutation_logger = [{} for _ in range(len(seqs))]
-            self.prev_fitness = torch.tensor(seqs_fitness, dtype=torch.float32).unsqueeze(1)
-            self.prev_mutants = ["" for _ in range(len(seqs))]
-            self.prev_variants = seqs
+        variants = [wt_seq for _ in range(self.population)]
+        self.mutation_logger = [{} for _ in range(self.population)]
+        self.prev_fitness = torch.tensor([[wt_fitness]], dtype=torch.float32)
+        self.prev_mutants = [""]
+        self.prev_variants = [wt_seq]
 
         for step in range(self.n_steps):
             # ============================ #
@@ -295,13 +286,15 @@ class DiscreteDirectedEvolution2:
             # ====== FITNESS PREDICTION ====== #
             # ================================ #
             inputs = enc_out
-            variants, score = self.predict_fitness(inputs, wt_fitness, mutated_seqs, mutants)
+            variants, score = self.predict_fitness(
+                inputs, wt_fitness, mutated_seqs, mutants, wt_seq
+            )
 
             logging.info(f"\n-------- STEP {step} --------")
             for i, (var, mut, s) in enumerate(zip(variants, self.prev_mutants, score)):
                 logging.info(f"{i}:\t{s}\t{mut}\t{var}")
 
-        return (self.prev_mutants, self.prev_fitness)
+        return self.prev_mutants, self.prev_fitness, variants
 
     def remove_dups(self, enc_out, mutated_seqs, mutants):
         candidate_array = np.array(mutated_seqs)
