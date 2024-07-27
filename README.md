@@ -23,11 +23,11 @@ https://doi.org/10.1101/2023.11.28.568945
 - [License](#license)
 
 ## Introduction
-This is the official implementation of the paper [Protein Design by Directed Evolution guided by Large Language Models](https://www.biorxiv.org/content/10.1101/2023.11.28.568945v1).
+This is the official implementation of the paper [Protein Design by Directed Evolution guided by Large Language Models](https://www.biorxiv.org/content/10.1101/2023.11.28.568945v2).
 
-| ![framework](./assets/Directed_Evolution_Framework.png) | 
+| ![framework](./assets/main.png) | 
 |:--:| 
-| *Our pipeline **(C)**, in comparision to traditional pipeline **(A)** and common ML-guided pipeline **(B)*** |
+| ***(A)** Workflow of traditional directed evolution. **(B)** We train the in-silico oracle as the “ground-truth” evaluator to predict the fitness score of each generated sequence. **(C)** Our proposed MLDE framework.* |
 
 ## Structure description
 
