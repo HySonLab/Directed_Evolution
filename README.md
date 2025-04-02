@@ -7,7 +7,11 @@ Contributors:
 * Tran Van Trong Thanh
 * Truong Son Hy (PI / Correspondent)
 
-Paper:
+Publication:
+
+https://doi.org/10.1109/TEVC.2024.3439690
+
+Preprint:
 
 https://doi.org/10.1101/2023.11.28.568945
 
@@ -189,6 +193,19 @@ options:
 
 ## Citation
 If our paper aids your work, please kindly cite our paper using the following bibtex
+```bibtex
+@ARTICLE{10628050,
+  author={Tran, Thanh V. T. and Hy, Truong Son},
+  journal={IEEE Transactions on Evolutionary Computation}, 
+  title={Protein Design by Directed Evolution Guided by Large Language Models}, 
+  year={2025},
+  volume={29},
+  number={2},
+  pages={418-428},
+  keywords={Proteins;Evolution (biology);Large language models;Optimization;Transformers;Protein engineering;Task analysis;Directed evolution;large language models (LLMs);machine learning (ML);protein engineering},
+  doi={10.1109/TEVC.2024.3439690}}
+```
+
 ```bibtex
 @article {Tran2023.11.28.568945,
 	author = {Trong Thanh Tran and Truong Son Hy},
