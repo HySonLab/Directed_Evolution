@@ -5,7 +5,7 @@
 
 Contributors:
 * Tran Van Trong Thanh
-* Truong Son Hy (PI / Correspondent)
+* Truong-Son Hy (PI / Correspondent)
 
 Publication:
 
